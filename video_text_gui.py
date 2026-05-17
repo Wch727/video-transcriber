@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QFont, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QFont, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -1106,6 +1106,8 @@ class VideoTextWindow(QMainWindow):
 
     def output_path_for(self, video: Path) -> Path:
         output_dir = Path(self.output_dir.text().strip() or APP_DIR)
+        if self.mode_combo.currentData() == "subtitle":
+            return output_dir / f"{video.stem}_subtitles.srt"
         fmt, suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
         language = self.language_code() or "auto"
         return output_dir / f"{video.stem}_transcript_{safe_part(language)}{suffix}"
@@ -1123,7 +1125,7 @@ class VideoTextWindow(QMainWindow):
             thumb = get_video_thumbnail(job.video)
             thumb_item = QTableWidgetItem()
             if thumb:
-                thumb_item.setIcon(thumb.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                thumb_item.setIcon(QIcon(thumb.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
             thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, thumb_item)
             # Data columns
@@ -1342,7 +1344,7 @@ class VideoTextWindow(QMainWindow):
         cmd = [
             status.ffmpeg, "-y",
             "-i", video_path,
-            "-vf", f"subtitles={srt_path}",
+            "-vf", f"subtitles={srt_path.replace(chr(92), '/')}",
             "-c:a", "copy",
             str(output_path),
         ]

@@ -29,7 +29,36 @@ from pathlib import Path
 from typing import Any
 
 
+if sys.platform == "win32":
+    import io
+
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 DEFAULT_MAX_UPLOAD_MB = 24.0
+
+_TESSERACT_LANG_MAP: dict[str, str] = {
+    "zh": "chi_sim", "en": "eng", "ja": "jpn", "ko": "kor", "es": "spa",
+    "fr": "fra", "de": "deu", "it": "ita", "pt": "por", "ru": "rus",
+    "ar": "ara", "hi": "hin", "vi": "vie", "th": "tha", "tr": "tur",
+    "nl": "nld", "sv": "swe", "pl": "pol", "uk": "ukr", "id": "ind",
+    "ms": "msa", "bn": "ben", "ur": "urd", "fa": "fas", "he": "heb",
+    "el": "ell", "cs": "ces", "da": "dan", "fi": "fin", "hu": "hun",
+    "ro": "ron", "no": "nor", "ca": "cat", "la": "lat", "sk": "slk",
+    "sl": "slv", "hr": "hrv", "sr": "srp", "bg": "bul", "lt": "lit",
+    "lv": "lav", "et": "est", "sw": "swa", "ml": "mal", "ta": "tam",
+    "te": "tel", "ka": "kat", "kk": "kaz", "ne": "nep", "am": "amh",
+    "my": "mya", "km": "khm", "lo": "lao", "mn": "mon", "az": "aze",
+    "uz": "uzb",
+}
+
+
+def map_ocr_language(code: str) -> str:
+    if "_" in code or "+" in code:
+        return code
+    return _TESSERACT_LANG_MAP.get(code, code)
 
 
 @dataclass(frozen=True)
@@ -520,7 +549,7 @@ def ocr_frames(
 
 
 def format_seconds(seconds: float) -> str:
-    total = int(round(seconds))
+    total = int(seconds)
     hours, rem = divmod(total, 3600)
     minutes, secs = divmod(rem, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
@@ -649,7 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == "subtitle":
             extract_subtitles(video, args.out, status)
         elif args.mode == "ocr":
-            ocr_language = args.language or "chi_sim+eng"
+            ocr_language = map_ocr_language(args.language) if args.language else "chi_sim+eng"
             ocr_frames(video, out, status, interval=args.ocr_interval, language=ocr_language)
         elif args.mode == "whisper":
             transcribe_with_local_whisper(
