@@ -322,8 +322,8 @@ class VideoTextWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Video Text Extractor")
-        self.resize(1220, 780)
-        self.setMinimumSize(1060, 700)
+        self.resize(1380, 880)
+        self.setMinimumSize(1100, 750)
         self.setAcceptDrops(True)
 
         self.jobs: list[Job] = []
@@ -338,6 +338,7 @@ class VideoTextWindow(QMainWindow):
         self._apply_style()
         self._refresh_runtime()
         self._retranslate()
+        self._refresh_history_list()
 
     def tr(self, key: str) -> str:
         return STRINGS[self.ui_lang].get(key, key)
@@ -449,8 +450,48 @@ class VideoTextWindow(QMainWindow):
         splitter.addWidget(right_panel)
 
         self._build_preview(right_layout)
-        self._build_history(right_layout)
-        splitter.setSizes([520, 620])
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(14)
+        log_container = QFrame()
+        log_container.setObjectName("panel")
+        log_layout = QVBoxLayout(log_container)
+        log_layout.setContentsMargins(12, 12, 12, 12)
+        log_layout.setSpacing(6)
+        self.log_title = QLabel()
+        self.log_title.setObjectName("sectionTitle")
+        log_layout.addWidget(self.log_title)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setFixedHeight(140)
+        log_layout.addWidget(self.log)
+        bottom_row.addWidget(log_container, 1)
+
+        hist_container = QFrame()
+        hist_container.setObjectName("panel")
+        hist_layout = QVBoxLayout(hist_container)
+        hist_layout.setContentsMargins(12, 12, 12, 12)
+        hist_layout.setSpacing(6)
+        hist_header = QHBoxLayout()
+        self.history_label = QLabel()
+        self.history_label.setObjectName("sectionTitle")
+        hist_header.addWidget(self.history_label)
+        hist_header.addStretch(1)
+        self.history_load_btn = QPushButton()
+        self.history_load_btn.clicked.connect(self._load_selected_history)
+        hist_header.addWidget(self.history_load_btn)
+        self.history_clear_btn = QPushButton()
+        self.history_clear_btn.clicked.connect(self._clear_history)
+        hist_header.addWidget(self.history_clear_btn)
+        hist_layout.addLayout(hist_header)
+        self.history_list = QListWidget()
+        self.history_list.setFixedHeight(100)
+        self.history_list.itemDoubleClicked.connect(self._load_selected_history)
+        hist_layout.addWidget(self.history_list)
+        bottom_row.addWidget(hist_container, 1)
+        right_layout.addLayout(bottom_row)
+
+        splitter.setSizes([500, 700])
 
         footer = QFrame()
         footer.setObjectName("footer")
@@ -620,36 +661,7 @@ class VideoTextWindow(QMainWindow):
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout.addWidget(self.preview, 2)
-
-        self.log_title = QLabel()
-        self.log_title.setObjectName("sectionTitle")
-        layout.addWidget(self.log_title)
-
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setFixedHeight(172)
-        layout.addWidget(self.log)
-
-    def _build_history(self, layout: QVBoxLayout) -> None:
-        hist_header = QHBoxLayout()
-        self.history_label = QLabel()
-        self.history_label.setObjectName("sectionTitle")
-        hist_header.addWidget(self.history_label)
-        hist_header.addStretch(1)
-        self.history_load_btn = QPushButton()
-        self.history_load_btn.clicked.connect(self._load_selected_history)
-        hist_header.addWidget(self.history_load_btn)
-        self.history_clear_btn = QPushButton()
-        self.history_clear_btn.clicked.connect(self._clear_history)
-        hist_header.addWidget(self.history_clear_btn)
-        layout.addLayout(hist_header)
-
-        self.history_list = QListWidget()
-        self.history_list.setFixedHeight(120)
-        self.history_list.itemDoubleClicked.connect(self._load_selected_history)
-        layout.addWidget(self.history_list)
-        self._refresh_history_list()
+        layout.addWidget(self.preview, 1)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
