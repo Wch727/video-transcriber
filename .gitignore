@@ -21,3 +21,4 @@ outputs/
 *.vtt
 *_ocr*.txt
 *.log
+.transcribe_history.json
