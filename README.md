@@ -1,107 +1,139 @@
 # Video Text Extractor
 
-一个本地视频转文字小工具，支持桌面窗口和命令行两种用法。默认使用本地 OpenAI Whisper 模型，不需要 OpenAI API Key。
+![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Whisper](https://img.shields.io/badge/Powered%20by-OpenAI%20Whisper-orange)
 
-## 功能
+A local video-to-text tool with a desktop GUI and CLI. Uses OpenAI Whisper locally by default — no API key required.
 
-- 桌面 GUI：双击启动，选择视频、语言、模型和输出格式。
-- 多语言转写：支持 English、Chinese、Japanese、Korean、Spanish、French、German、Italian、Portuguese、Russian、Arabic、Hindi、Vietnamese、Thai 等，也支持自定义 Whisper 语言代码。
-- 多种输出格式：TXT、SRT、VTT、JSON。
-- 本地运行：视频留在本机，Whisper 模型下载后可离线复用。
-- 命令行模式：适合批处理或快速转写。
-- 可选画面 OCR：`local_video_ocr.js` 可从视频画面中识别字幕或课件文字。
+一个本地视频转文字工具，支持桌面 GUI 和命令行。默认使用本地 Whisper 模型，无需 API Key。
 
-## 安装依赖
+---
+
+## Features / 功能
+
+- **Desktop GUI** — Drag-and-drop video files, choose language/model/format, batch process with one click.
+- **桌面 GUI** — 拖拽添加视频，选择语言/模型/格式，一键批量处理。
+- **55+ Languages** — English, Chinese, Japanese, Korean, Spanish, French, German, Arabic, Hindi, Thai, and many more.
+- **55+ 种语言** — 英语、中文、日语、韩语、西班牙语、法语、德语、阿拉伯语、印地语、泰语等。
+- **Multiple Output Formats** — TXT, SRT (subtitles), VTT (web subtitles), JSON (full metadata).
+- **多种输出格式** — TXT、SRT（字幕）、VTT（Web 字幕）、JSON（完整元数据）.
+- **Local & Offline** — Videos stay on your machine. Whisper models are cached after first download.
+- **本地离线** — 视频不离开本机，Whisper 模型首次下载后可离线复用。
+- **CLI Mode** — Scriptable batch transcription for power users.
+- **命令行模式** — 适合批处理或自动化场景。
+- **Visual OCR** — Optional `local_video_ocr.js` extracts on-screen text from video frames.
+- **画面 OCR** — 可选的 `local_video_ocr.js` 从视频画面中识别文字。
+- **Bilingual UI** — Switch between Chinese and English interface with one click.
+- **双语界面** — 一键切换中文/英文界面。
+
+---
+
+## Quick Start / 快速开始
+
+### Install / 安装
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-第一次使用某个 Whisper 模型时会自动下载模型文件，例如 `tiny`、`base`、`small`。下载完成后会缓存在本机。
+Whisper models download automatically on first use (`tiny`, `base`, `small`, `medium`).
 
-## 启动桌面版
+首次使用时自动下载 Whisper 模型。
 
-双击：
+### Launch GUI / 启动桌面版
 
-```text
-start_video_text_gui.bat
-```
+Double-click `start_video_text_gui.bat` or run:
 
-或在 PowerShell 中运行：
+双击 `start_video_text_gui.bat`，或运行：
 
 ```powershell
-python .\video_text_gui.py
+python video_text_gui.py
 ```
 
-桌面窗口支持：
+---
 
-- 选择视频格式：MP4、MOV、MKV、WEBM、M4V、AVI。
-- 选择视频文件。
-- 切换界面语言：中文 / English。
-- 选择转写语言或自动识别。
-- 选择 Whisper 模型：`tiny` 最快，`base` 均衡，`small` 更准但更慢。
-- 选择任务：原文转写或翻译成英文。
-- 选择输出格式：TXT、SRT、VTT、JSON。
+## CLI Usage / 命令行用法
 
-## 命令行用法
-
-英文视频转英文文本：
+English video to text:
 
 ```powershell
-python .\video_text_extractor.py .\4-2.mp4 --mode whisper --whisper-model base --language en -o .\4-2_transcript_en.txt
+python video_text_extractor.py video.mp4 --mode whisper --whisper-model base --language en
 ```
 
-输出字幕文件：
+Output subtitles:
 
 ```powershell
-python .\video_text_extractor.py .\4-2.mp4 --mode whisper --whisper-model base --language en --format srt -o .\4-2.srt
+python video_text_extractor.py video.mp4 --mode whisper --format srt -o subtitles.srt
 ```
 
-自动识别语言：
+Auto-detect language:
 
 ```powershell
-python .\video_text_extractor.py .\your_video.mp4 --mode whisper --whisper-model base -o .\transcript.txt
+python video_text_extractor.py video.mp4 --mode whisper --whisper-model base
 ```
 
-翻译成英文：
+Translate to English:
 
 ```powershell
-python .\video_text_extractor.py .\your_video.mp4 --mode whisper --whisper-task translate --format vtt -o .\translated.vtt
+python video_text_extractor.py video.mp4 --mode whisper --whisper-task translate --format vtt -o translated.vtt
 ```
 
-## 输出格式
+### CLI Options / 命令行参数
 
-- `text` / TXT：带时间戳的普通文本。
-- `srt` / SRT：常见字幕格式。
-- `vtt` / VTT：Web 字幕格式。
-- `json` / JSON：包含完整文本、语言和分段时间。
+| Flag | Description |
+|------|-------------|
+| `--mode` | `whisper` (local), `audio` (OpenAI API), `subtitle`, `ocr`, `auto` |
+| `--whisper-model` | `tiny` / `base` / `small` / `medium` / `large` |
+| `--language` | Language code: `en`, `zh`, `ja`, `es`, etc. |
+| `--format` | `text`, `srt`, `vtt`, `json` |
+| `--whisper-task` | `transcribe` (original) or `translate` (to English) |
+| `-o` | Output file path |
 
-## 画面 OCR
+---
 
-如果视频里有字幕、课件文字或标题，但你想识别画面文字，可以使用：
+## Output Formats / 输出格式
+
+| Format | Description |
+|--------|-------------|
+| **TXT** | Timestamped plain text / 带时间戳的纯文本 |
+| **SRT** | Standard subtitle format / 标准字幕格式 |
+| **VTT** | Web subtitle format / Web 字幕格式 |
+| **JSON** | Full text + language + segment metadata / 完整元数据 |
+
+---
+
+## Visual OCR / 画面 OCR
+
+Extract on-screen text (subtitles, slides, titles) from video frames using `local_video_ocr.js`:
 
 ```powershell
 npm install
+node local_video_ocr.js video.mp4 --interval 1 -o ocr_output.txt
 ```
+
+Full-frame OCR:
 
 ```powershell
-node .\local_video_ocr.js .\4-1.mp4 --interval 1 -o .\4-1_ocr_local.txt
+node local_video_ocr.js video.mp4 --full-frame --interval 3 -o full_ocr.txt
 ```
 
-默认只识别画面底部区域，更适合字幕。识别整张画面：
+---
 
-```powershell
-node .\local_video_ocr.js .\4-1.mp4 --full-frame --interval 3 -o .\4-1_full_frame_ocr.txt
+## Project Structure / 项目结构
+
+```
+video_text_gui.py          # Desktop GUI / 桌面界面
+video_text_extractor.py    # Core transcription engine / 核心转写引擎
+local_video_ocr.js         # Visual OCR tool / 画面 OCR 工具
+start_video_text_gui.bat   # Windows launcher / Windows 启动器
+requirements.txt           # Python dependencies / Python 依赖
+package.json               # Node.js dependencies (OCR) / Node.js 依赖
 ```
 
-## 项目文件
+---
 
-- `video_text_gui.py`：桌面 GUI。
-- `video_text_extractor.py`：核心转写脚本。
-- `local_video_ocr.js`：本地画面 OCR。
-- `start_video_text_gui.bat`：Windows 双击启动器。
-- `requirements.txt`：Python 依赖。
+## License / 许可证
 
-## GitHub 发布说明
-
-仓库默认忽略视频、转写结果、缓存、上传文件和 Python 编译缓存。示例视频请不要提交到仓库中，避免仓库过大。
+[MIT](LICENSE)

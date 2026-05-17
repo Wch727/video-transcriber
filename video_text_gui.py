@@ -1,29 +1,57 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
-import threading
+from dataclasses import dataclass
 from pathlib import Path
-from tkinter import END, filedialog, messagebox
-import tkinter as tk
-from tkinter import ttk
 
+from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtGui import QAction, QColor, QFont, QLinearGradient, QPalette
+from PySide6.QtWidgets import (
+    QApplication,
+    QButtonGroup,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 APP_DIR = Path(__file__).resolve().parent
 EXTRACTOR = APP_DIR / "video_text_extractor.py"
 
-SUPPORTED_VIDEO_TYPES = {
-    "All supported": ["*.mp4", "*.mov", "*.mkv", "*.webm", "*.m4v", "*.avi"],
-    "MP4": ["*.mp4"],
-    "MOV": ["*.mov"],
-    "MKV": ["*.mkv"],
-    "WEBM": ["*.webm"],
-    "M4V": ["*.m4v"],
-    "AVI": ["*.avi"],
+VIDEO_FILTERS = {
+    "All supported": "*.mp4 *.mov *.mkv *.webm *.m4v *.avi",
+    "MP4": "*.mp4",
+    "MOV": "*.mov",
+    "MKV": "*.mkv",
+    "WEBM": "*.webm",
+    "M4V": "*.m4v",
+    "AVI": "*.avi",
 }
 
-LANGUAGE_OPTIONS = [
+LANGUAGES = [
     ("Auto detect", ""),
     ("English", "en"),
     ("Chinese", "zh"),
@@ -68,6 +96,19 @@ LANGUAGE_OPTIONS = [
     ("Latvian", "lv"),
     ("Estonian", "et"),
     ("Swahili", "sw"),
+    ("Malayalam", "ml"),
+    ("Tamil", "ta"),
+    ("Telugu", "te"),
+    ("Georgian", "ka"),
+    ("Kazakh", "kk"),
+    ("Nepali", "ne"),
+    ("Amharic", "am"),
+    ("Burmese", "my"),
+    ("Khmer", "km"),
+    ("Lao", "lo"),
+    ("Mongolian", "mn"),
+    ("Azerbaijani", "az"),
+    ("Uzbek", "uz"),
     ("Custom code", "custom"),
 ]
 
@@ -78,570 +119,911 @@ OUTPUT_FORMATS = {
     "JSON": ("json", ".json"),
 }
 
-UI = {
+STRINGS = {
     "zh": {
-        "title": "Video Text Extractor",
-        "tagline": "本地视频转写工具，不需要 API Key",
-        "app_language": "界面语言",
-        "input": "输入",
-        "video_format": "视频格式",
-        "video_file": "视频文件",
-        "browse": "浏览",
-        "use_41": "使用 4-1.mp4",
-        "use_42": "使用 4-2.mp4",
-        "settings": "转写设置",
-        "language": "转写语言",
-        "custom_code": "自定义语言代码",
-        "model": "Whisper 模型",
-        "model_hint": "tiny 最快，base 均衡，small 更准但更慢。",
-        "task": "任务",
-        "transcribe": "原文转写",
-        "translate": "翻译成英文",
-        "output": "输出",
-        "output_format": "输出格式",
-        "output_file": "输出文件",
-        "save_as": "另存为",
-        "start": "开始转写",
-        "cancel": "取消",
-        "open_folder": "打开输出文件夹",
-        "preview": "结果预览",
-        "log": "运行日志",
+        "title": "视频文字\n提取器",
+        "subtitle": "本地转写工作室\n基于 Whisper",
         "ready": "就绪",
-        "running": "转写中",
-        "done": "完成",
-        "failed": "失败",
-        "video_missing": "请选择有效的视频文件。",
-        "output_missing": "请选择输出文件。",
-        "starting": "正在启动转写...",
-        "saved": "已保存",
-        "done_box": "转写完成",
-        "failed_box": "转写失败",
-        "missing_file": "找不到文件",
-        "select_video": "选择视频",
-        "select_output": "选择输出文件",
-        "runtime": "运行环境",
-        "whisper_ready": "本地 Whisper",
-        "ffmpeg_ready": "ffmpeg",
-        "openai_key": "OpenAI Key",
-        "available": "可用",
         "missing": "缺失",
-        "latest": "最近输出会显示在这里",
+        "local_whisper": "本地 Whisper",
+        "openai_key": "OpenAI 密钥",
+        "add_videos": "添加视频",
+        "status_ready": "就绪",
+        "status_running": "运行中",
+        "status_done": "完成",
+        "status_cancelled": "已取消",
+        "page_title": "转写工作区",
+        "page_caption": "批量处理视频，选择语言，导出文本或字幕。",
+        "open_folder": "打开输出目录",
+        "settings": "设置",
+        "video_format": "视频格式",
+        "language": "语言",
+        "custom_code": "自定义代码",
+        "model": "模型",
+        "output": "输出格式",
+        "output_folder": "输出目录",
+        "task": "任务",
+        "transcribe": "转写",
+        "translate_en": "翻译成英文",
+        "queue": "队列",
+        "remove": "移除",
+        "clear": "清空",
+        "col_video": "视频",
+        "col_size": "大小",
+        "col_output": "输出",
+        "col_status": "状态",
+        "preview": "预览",
+        "copy_preview": "复制预览",
+        "preview_placeholder": "转写完成后将在此显示。",
+        "log": "日志",
+        "start": "开始",
+        "cancel": "取消",
+        "queue_empty": "队列为空",
+        "queue_empty_msg": "请先添加至少一个视频。",
+        "missing_file": "文件缺失",
+        "missing_file_msg": "找不到文件：\n{}",
+        "lang_toggle": "EN",
+        "ready_status": "就绪",
+        "running_status": "运行中",
+        "done_status": "完成",
+        "cancelled_status": "已取消",
+        "failed_status": "失败",
+        "starting": "开始处理：{}",
+        "saved": "已保存：{}",
+        "failed_code": "失败，退出码 {}",
+        "output_will_be": "输出将保存到：\n{}",
     },
     "en": {
-        "title": "Video Text Extractor",
-        "tagline": "Local video transcription, no API key required",
-        "app_language": "App language",
-        "input": "Input",
+        "title": "Video Text\nExtractor",
+        "subtitle": "Local transcription studio\nPowered by Whisper",
+        "ready": "Ready",
+        "missing": "Missing",
+        "local_whisper": "Local Whisper",
+        "openai_key": "OpenAI key",
+        "add_videos": "Add videos",
+        "status_ready": "Ready",
+        "status_running": "Running",
+        "status_done": "Done",
+        "status_cancelled": "Cancelled",
+        "page_title": "Transcription Workspace",
+        "page_caption": "Batch videos, choose languages, export text or subtitles.",
+        "open_folder": "Open output folder",
+        "settings": "Settings",
         "video_format": "Video format",
-        "video_file": "Video file",
-        "browse": "Browse",
-        "use_41": "Use 4-1.mp4",
-        "use_42": "Use 4-2.mp4",
-        "settings": "Transcription",
         "language": "Language",
-        "custom_code": "Custom language code",
-        "model": "Whisper model",
-        "model_hint": "tiny is fastest, base is balanced, small is more accurate.",
+        "custom_code": "Custom code",
+        "model": "Model",
+        "output": "Output",
+        "output_folder": "Output folder",
         "task": "Task",
         "transcribe": "Transcribe",
-        "translate": "Translate to English",
-        "output": "Output",
-        "output_format": "Output format",
-        "output_file": "Output file",
-        "save_as": "Save as",
-        "start": "Start transcription",
-        "cancel": "Cancel",
-        "open_folder": "Open output folder",
+        "translate_en": "Translate to English",
+        "queue": "Queue",
+        "remove": "Remove",
+        "clear": "Clear",
+        "col_video": "Video",
+        "col_size": "Size",
+        "col_output": "Output",
+        "col_status": "Status",
         "preview": "Preview",
+        "copy_preview": "Copy preview",
+        "preview_placeholder": "Completed transcript appears here.",
         "log": "Log",
-        "ready": "Ready",
-        "running": "Running",
-        "done": "Done",
-        "failed": "Failed",
-        "video_missing": "Please choose a valid video file.",
-        "output_missing": "Please choose an output file.",
-        "starting": "Starting transcription...",
-        "saved": "Saved",
-        "done_box": "Transcription complete",
-        "failed_box": "Transcription failed",
+        "start": "Start",
+        "cancel": "Cancel",
+        "queue_empty": "Queue empty",
+        "queue_empty_msg": "Add at least one video first.",
         "missing_file": "Missing file",
-        "select_video": "Choose video",
-        "select_output": "Choose output file",
-        "runtime": "Runtime",
-        "whisper_ready": "Local Whisper",
-        "ffmpeg_ready": "ffmpeg",
-        "openai_key": "OpenAI key",
-        "available": "Ready",
-        "missing": "Missing",
-        "latest": "The latest result will appear here",
+        "missing_file_msg": "Cannot find:\n{}",
+        "lang_toggle": "中",
+        "ready_status": "Ready",
+        "running_status": "Running",
+        "done_status": "Done",
+        "cancelled_status": "Cancelled",
+        "failed_status": "Failed",
+        "starting": "Starting: {}",
+        "saved": "Saved: {}",
+        "failed_code": "Failed with exit code {}",
+        "output_will_be": "Output will be saved to:\n{}",
     },
 }
 
 
-class VideoTextApp(tk.Tk):
+@dataclass
+class Job:
+    video: Path
+    output: Path
+    status: str = "Waiting"
+
+
+def safe_part(value: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return value.strip("._") or "auto"
+
+
+def file_size(path: Path) -> str:
+    size = path.stat().st_size
+    if size >= 1024 * 1024 * 1024:
+        return f"{size / 1024 / 1024 / 1024:.2f} GB"
+    return f"{size / 1024 / 1024:.1f} MB"
+
+
+class VideoTextWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Video Text Extractor")
-        self.geometry("1080x760")
-        self.minsize(960, 680)
-        self.configure(bg="#eef3f8")
+        self.setWindowTitle("Video Text Extractor")
+        self.resize(1220, 780)
+        self.setMinimumSize(1060, 700)
 
-        self.process: subprocess.Popen[str] | None = None
-        self.worker: threading.Thread | None = None
+        self.jobs: list[Job] = []
+        self.active_index: int | None = None
+        self.process: QProcess | None = None
+        self.language_to_code: dict[str, str] = {}
+        self.ui_lang = "zh"
 
-        self.ui_language = tk.StringVar(value="zh")
-        self.video_path = tk.StringVar()
-        self.video_type = tk.StringVar(value="All supported")
-        self.transcript_language = tk.StringVar(value=self._language_display("English", "en"))
-        self.custom_language = tk.StringVar()
-        self.model = tk.StringVar(value="base")
-        self.task = tk.StringVar(value="transcribe")
-        self.output_format = tk.StringVar(value="TXT")
-        self.output_path = tk.StringVar()
-        self.status_key = "ready"
-
-        self.language_display_to_code: dict[str, str] = {}
-        self.custom_language_frame: ttk.Frame | None = None
-        self.preview: tk.Text | None = None
-        self.log: tk.Text | None = None
-        self.progress: ttk.Progressbar | None = None
-        self.start_button: ttk.Button | None = None
-        self.cancel_button: ttk.Button | None = None
-        self.status_label: ttk.Label | None = None
-
-        self._build_style()
+        self._build_actions()
         self._build_ui()
-        self._load_first_video()
+        self._apply_style()
+        self._load_sample_files()
+        self._refresh_runtime()
+        self._retranslate()
 
     def tr(self, key: str) -> str:
-        return UI[self.ui_language.get()][key]
+        return STRINGS[self.ui_lang].get(key, key)
 
-    def _build_style(self) -> None:
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        style.configure("App.TFrame", background="#eef3f8")
-        style.configure("Surface.TFrame", background="#ffffff")
-        style.configure("Muted.TFrame", background="#f8fafc")
-        style.configure("Header.TFrame", background="#162033")
-        style.configure("Title.TLabel", background="#162033", foreground="#ffffff", font=("Segoe UI", 21, "bold"))
-        style.configure("Subtitle.TLabel", background="#162033", foreground="#b8c7dc", font=("Segoe UI", 10))
-        style.configure("TLabel", background="#ffffff", foreground="#1b2535", font=("Segoe UI", 10))
-        style.configure("Section.TLabel", background="#ffffff", foreground="#111827", font=("Segoe UI", 12, "bold"))
-        style.configure("Hint.TLabel", background="#ffffff", foreground="#64748b", font=("Segoe UI", 9))
-        style.configure("Status.TLabel", background="#162033", foreground="#dbeafe", font=("Segoe UI", 10, "bold"))
-        style.configure("Metric.TLabel", background="#f8fafc", foreground="#334155", font=("Segoe UI", 9))
-        style.configure("Primary.TButton", background="#2563eb", foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(16, 9))
-        style.map("Primary.TButton", background=[("active", "#1d4ed8"), ("disabled", "#94a3b8")])
-        style.configure("TButton", padding=(12, 7), font=("Segoe UI", 10))
-        style.configure("TCombobox", padding=(6, 4))
-        style.configure("TEntry", padding=(6, 5))
-        style.configure("TRadiobutton", background="#ffffff", foreground="#1b2535", font=("Segoe UI", 10))
-        style.configure("Horizontal.TProgressbar", troughcolor="#e2e8f0", background="#2563eb")
+    def _build_actions(self) -> None:
+        add_action = QAction("Add videos", self)
+        add_action.triggered.connect(self.add_videos)
+        self.addAction(add_action)
 
     def _build_ui(self) -> None:
-        for child in self.winfo_children():
-            child.destroy()
+        root = QWidget()
+        self.setCentralWidget(root)
 
-        self.language_display_to_code = {}
-        shell = ttk.Frame(self, style="App.TFrame", padding=18)
-        shell.pack(fill="both", expand=True)
+        outer = QHBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        self._build_header(shell)
-        body = ttk.Frame(shell, style="App.TFrame")
-        body.pack(fill="both", expand=True, pady=(14, 0))
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(282)
+        outer.addWidget(sidebar)
 
-        controls = ttk.Frame(body, style="Surface.TFrame", padding=18)
-        controls.pack(side="left", fill="y", padx=(0, 14))
-        controls.configure(width=390)
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(22, 22, 22, 22)
+        side_layout.setSpacing(16)
 
-        output = ttk.Frame(body, style="Surface.TFrame", padding=18)
-        output.pack(side="right", fill="both", expand=True)
+        self.title_label = QLabel()
+        self.title_label.setObjectName("appTitle")
+        side_layout.addWidget(self.title_label)
 
-        self._build_controls(controls)
-        self._build_output(output)
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setObjectName("appSubtitle")
+        side_layout.addWidget(self.subtitle_label)
+
+        lang_row = QHBoxLayout()
+        lang_row.setSpacing(8)
+        lang_icon = QLabel("\U0001f310")
+        lang_icon.setObjectName("langIcon")
+        lang_row.addWidget(lang_icon)
+        self.lang_toggle = QPushButton()
+        self.lang_toggle.setObjectName("langToggle")
+        self.lang_toggle.setFixedWidth(48)
+        self.lang_toggle.clicked.connect(self._toggle_language)
+        lang_row.addWidget(self.lang_toggle)
+        lang_row.addStretch(1)
+        side_layout.addLayout(lang_row)
+
+        self.runtime_list = QListWidget()
+        self.runtime_list.setObjectName("runtimeList")
+        self.runtime_list.setFixedHeight(128)
+        side_layout.addWidget(self.runtime_list)
+
+        side_layout.addSpacing(4)
+        self.add_button = QPushButton()
+        self.add_button.setObjectName("primaryButton")
+        self.add_button.clicked.connect(self.add_videos)
+        side_layout.addWidget(self.add_button)
+
+        self.sample_41_button = QPushButton("\U0001f3ac 4-1.mp4")
+        self.sample_41_button.clicked.connect(lambda: self.add_video_path(APP_DIR / "4-1.mp4"))
+        side_layout.addWidget(self.sample_41_button)
+
+        self.sample_42_button = QPushButton("\U0001f3ac 4-2.mp4")
+        self.sample_42_button.clicked.connect(lambda: self.add_video_path(APP_DIR / "4-2.mp4"))
+        side_layout.addWidget(self.sample_42_button)
+
+        side_layout.addStretch(1)
+
+        self.status_badge = QLabel()
+        self.status_badge.setObjectName("statusBadge")
+        self.status_badge.setAlignment(Qt.AlignCenter)
+        side_layout.addWidget(self.status_badge)
+
+        content = QFrame()
+        content.setObjectName("content")
+        outer.addWidget(content, 1)
+
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 22, 24, 22)
+        content_layout.setSpacing(18)
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        heading_box = QVBoxLayout()
+        self.heading_label = QLabel()
+        self.heading_label.setObjectName("pageTitle")
+        heading_box.addWidget(self.heading_label)
+        self.caption_label = QLabel()
+        self.caption_label.setObjectName("pageCaption")
+        heading_box.addWidget(self.caption_label)
+        header.addLayout(heading_box, 1)
+
+        self.open_folder_button = QPushButton()
+        self.open_folder_button.clicked.connect(self.open_output_folder)
+        header.addWidget(self.open_folder_button)
+        content_layout.addLayout(header)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setObjectName("splitter")
+        content_layout.addWidget(splitter, 1)
+
+        left_panel = QFrame()
+        left_panel.setObjectName("panel")
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(18, 18, 18, 18)
+        left_layout.setSpacing(14)
+        splitter.addWidget(left_panel)
+
+        self._build_settings(left_layout)
+        self._build_queue(left_layout)
+
+        right_panel = QFrame()
+        right_panel.setObjectName("panel")
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(18, 18, 18, 18)
+        right_layout.setSpacing(14)
+        splitter.addWidget(right_panel)
+
+        self._build_preview(right_layout)
+        splitter.setSizes([520, 620])
+
+        footer = QFrame()
+        footer.setObjectName("footer")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(16, 12, 16, 12)
+        footer_layout.setSpacing(12)
+        content_layout.addWidget(footer)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        footer_layout.addWidget(self.progress, 1)
+
+        self.start_button = QPushButton()
+        self.start_button.setObjectName("primaryButton")
+        self.start_button.clicked.connect(self.start_jobs)
+        footer_layout.addWidget(self.start_button)
+
+        self.cancel_button = QPushButton()
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_current)
+        footer_layout.addWidget(self.cancel_button)
+
+    def _build_settings(self, layout: QVBoxLayout) -> None:
+        self.settings_group = QGroupBox()
+        settings_layout = QGridLayout(self.settings_group)
+        settings_layout.setContentsMargins(14, 18, 14, 14)
+        settings_layout.setHorizontalSpacing(12)
+        settings_layout.setVerticalSpacing(12)
+        layout.addWidget(self.settings_group)
+
+        self.format_label = QLabel()
+        self.format_combo = QComboBox()
+        self.format_combo.addItems(VIDEO_FILTERS.keys())
+        settings_layout.addWidget(self.format_label, 0, 0)
+        settings_layout.addWidget(self.format_combo, 0, 1)
+
+        self.language_label = QLabel()
+        self.language_combo = QComboBox()
+        for name, code in LANGUAGES:
+            label = name if not code else f"{name} ({code})"
+            self.language_to_code[label] = code
+            self.language_combo.addItem(label)
+            if code == "en":
+                self.language_combo.setCurrentText(label)
+        self.language_combo.currentTextChanged.connect(self._toggle_custom_language)
+        self.language_combo.currentTextChanged.connect(self.refresh_outputs)
+        settings_layout.addWidget(self.language_label, 1, 0)
+        settings_layout.addWidget(self.language_combo, 1, 1)
+
+        self.custom_label = QLabel()
+        self.custom_language = QLineEdit()
+        self.custom_language.setPlaceholderText("e.g. en, zh, es")
+        self.custom_language.textChanged.connect(self.refresh_outputs)
+        settings_layout.addWidget(self.custom_label, 2, 0)
+        settings_layout.addWidget(self.custom_language, 2, 1)
+
+        self.model_label = QLabel()
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(["tiny", "base", "small", "medium"])
+        self.model_combo.setCurrentText("base")
+        settings_layout.addWidget(self.model_label, 3, 0)
+        settings_layout.addWidget(self.model_combo, 3, 1)
+
+        self.output_label = QLabel()
+        self.output_combo = QComboBox()
+        self.output_combo.addItems(OUTPUT_FORMATS.keys())
+        self.output_combo.currentTextChanged.connect(self.refresh_outputs)
+        settings_layout.addWidget(self.output_label, 4, 0)
+        settings_layout.addWidget(self.output_combo, 4, 1)
+
+        self.folder_label = QLabel()
+        self.output_dir = QLineEdit(str(APP_DIR / "outputs"))
+        self.output_dir.textChanged.connect(self.refresh_outputs)
+        browse_output = QToolButton()
+        browse_output.setText("...")
+        browse_output.clicked.connect(self.choose_output_dir)
+        output_row = QHBoxLayout()
+        output_row.setContentsMargins(0, 0, 0, 0)
+        output_row.addWidget(self.output_dir, 1)
+        output_row.addWidget(browse_output)
+        settings_layout.addWidget(self.folder_label, 5, 0)
+        settings_layout.addLayout(output_row, 5, 1)
+
+        self.task_label = QLabel()
+        task_box = QHBoxLayout()
+        task_box.setContentsMargins(0, 0, 0, 0)
+        self.task_group = QButtonGroup(self)
+        self.transcribe_radio = QRadioButton()
+        self.translate_radio = QRadioButton()
+        self.transcribe_radio.setChecked(True)
+        self.task_group.addButton(self.transcribe_radio)
+        self.task_group.addButton(self.translate_radio)
+        task_box.addWidget(self.transcribe_radio)
+        task_box.addWidget(self.translate_radio)
+        settings_layout.addWidget(self.task_label, 6, 0)
+        settings_layout.addLayout(task_box, 6, 1)
+
         self._toggle_custom_language()
-        self._set_status(self.status_key)
 
-    def _build_header(self, parent: ttk.Frame) -> None:
-        header = ttk.Frame(parent, style="Header.TFrame", padding=(20, 16))
-        header.pack(fill="x")
-        header.columnconfigure(0, weight=1)
+    def _build_queue(self, layout: QVBoxLayout) -> None:
+        queue_header = QHBoxLayout()
+        self.queue_label = QLabel()
+        self.queue_label.setObjectName("sectionTitle")
+        queue_header.addWidget(self.queue_label)
+        queue_header.addStretch(1)
 
-        title_area = ttk.Frame(header, style="Header.TFrame")
-        title_area.grid(row=0, column=0, sticky="w")
-        ttk.Label(title_area, text=self.tr("title"), style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_area, text=self.tr("tagline"), style="Subtitle.TLabel").pack(anchor="w", pady=(3, 0))
+        self.remove_button = QPushButton()
+        self.remove_button.clicked.connect(self.remove_selected)
+        queue_header.addWidget(self.remove_button)
 
-        right = ttk.Frame(header, style="Header.TFrame")
-        right.grid(row=0, column=1, sticky="e")
-        ttk.Label(right, text=self.tr("app_language"), style="Subtitle.TLabel").pack(anchor="e")
-        selector = ttk.Combobox(
-            right,
-            values=["中文", "English"],
-            state="readonly",
-            width=13,
+        self.clear_button = QPushButton()
+        self.clear_button.clicked.connect(self.clear_queue)
+        queue_header.addWidget(self.clear_button)
+        layout.addLayout(queue_header)
+
+        self.table = QTableWidget(0, 4)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.itemSelectionChanged.connect(self.preview_selected_output)
+        layout.addWidget(self.table, 1)
+
+    def _build_preview(self, layout: QVBoxLayout) -> None:
+        title_row = QHBoxLayout()
+        self.preview_title = QLabel()
+        self.preview_title.setObjectName("sectionTitle")
+        title_row.addWidget(self.preview_title)
+        title_row.addStretch(1)
+        self.copy_button = QPushButton()
+        self.copy_button.clicked.connect(self.copy_preview)
+        title_row.addWidget(self.copy_button)
+        layout.addLayout(title_row)
+
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.preview, 2)
+
+        self.log_title = QLabel()
+        self.log_title.setObjectName("sectionTitle")
+        layout.addWidget(self.log_title)
+
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setFixedHeight(172)
+        layout.addWidget(self.log)
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QWidget {
+                font-family: "Segoe UI", "Microsoft YaHei UI";
+                font-size: 13px;
+                color: #142033;
+            }
+            #sidebar {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a2332, stop:1 #0d1117);
+                border-right: 1px solid #0d1117;
+            }
+            #appTitle {
+                color: #e6edf3;
+                font-size: 28px;
+                font-weight: 800;
+                line-height: 1.05;
+            }
+            #appSubtitle {
+                color: #8b949e;
+                font-size: 13px;
+                line-height: 1.35;
+            }
+            #langIcon {
+                font-size: 16px;
+                color: #8b949e;
+            }
+            #langToggle {
+                background: #21262d;
+                color: #58a6ff;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            #langToggle:hover {
+                background: #30363d;
+                border-color: #58a6ff;
+            }
+            #statusBadge {
+                color: #e6edf3;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #238636, stop:1 #2ea043);
+                border-radius: 16px;
+                padding: 9px 12px;
+                font-weight: 700;
+            }
+            #content {
+                background: #f6f8fa;
+            }
+            #pageTitle {
+                font-size: 24px;
+                font-weight: 800;
+                color: #0d1117;
+            }
+            #pageCaption {
+                color: #656d76;
+                font-size: 13px;
+            }
+            #panel {
+                background: white;
+                border: 1px solid #d0d7de;
+                border-radius: 14px;
+            }
+            #footer {
+                background: white;
+                border: 1px solid #d0d7de;
+                border-radius: 14px;
+            }
+            #sectionTitle {
+                font-size: 15px;
+                font-weight: 800;
+                color: #0d1117;
+            }
+            QGroupBox {
+                border: 1px solid #d0d7de;
+                border-radius: 12px;
+                margin-top: 10px;
+                padding-top: 10px;
+                font-weight: 800;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: #24292f;
+            }
+            QLineEdit, QComboBox, QPlainTextEdit {
+                background: #ffffff;
+                border: 1px solid #d0d7de;
+                border-radius: 8px;
+                padding: 8px;
+                selection-background-color: #b6d4fe;
+            }
+            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {
+                border-color: #58a6ff;
+                outline: none;
+            }
+            QComboBox::drop-down {
+                border: none;
+                padding-right: 8px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #656d76;
+                margin-right: 4px;
+            }
+            QPlainTextEdit {
+                font-family: "Cascadia Mono", Consolas, monospace;
+                line-height: 1.4;
+            }
+            QTableWidget {
+                background: #ffffff;
+                alternate-background-color: #f6f8fa;
+                border: 1px solid #d0d7de;
+                border-radius: 10px;
+                gridline-color: #e8ecf0;
+            }
+            QTableWidget::item:selected {
+                background: #ddf4ff;
+                color: #0d1117;
+            }
+            QHeaderView::section {
+                background: #f6f8fa;
+                color: #24292f;
+                border: none;
+                border-bottom: 1px solid #d0d7de;
+                padding: 8px;
+                font-weight: 700;
+            }
+            QListWidget#runtimeList {
+                background: #161b22;
+                color: #e6edf3;
+                border: 1px solid #30363d;
+                border-radius: 12px;
+                padding: 6px;
+            }
+            QListWidget#runtimeList::item {
+                padding: 3px 6px;
+                border-radius: 4px;
+            }
+            QListWidget#runtimeList::item:hover {
+                background: #21262d;
+            }
+            QPushButton {
+                background: #f6f8fa;
+                border: 1px solid #d0d7de;
+                border-radius: 9px;
+                padding: 9px 13px;
+                color: #24292f;
+                font-weight: 650;
+            }
+            QPushButton:hover {
+                background: #e8ecf0;
+                border-color: #afb8c1;
+            }
+            QPushButton:pressed {
+                background: #d0d7de;
+            }
+            QPushButton:disabled {
+                color: #8c959f;
+                background: #f6f8fa;
+                border-color: #e8ecf0;
+            }
+            QPushButton#primaryButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2f81f7, stop:1 #1f6feb);
+                color: white;
+                border: 1px solid #1a73e8;
+            }
+            QPushButton#primaryButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4c9aff, stop:1 #2f81f7);
+            }
+            QPushButton#primaryButton:pressed {
+                background: #1a5cc7;
+            }
+            QPushButton#primaryButton:disabled {
+                background: #94b8e8;
+                border-color: #8aacdb;
+            }
+            QProgressBar {
+                border: 1px solid #d0d7de;
+                border-radius: 9px;
+                text-align: center;
+                background: #f6f8fa;
+                height: 22px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2f81f7, stop:1 #58a6ff);
+                border-radius: 8px;
+            }
+            QRadioButton {
+                spacing: 8px;
+            }
+            QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QSplitter::handle {
+                background: transparent;
+                width: 8px;
+            }
+            """
         )
-        selector.set("中文" if self.ui_language.get() == "zh" else "English")
-        selector.pack(anchor="e", pady=(3, 8))
-        selector.bind("<<ComboboxSelected>>", lambda event: self._change_ui_language(selector.get()))
-        self.status_label = ttk.Label(right, text="", style="Status.TLabel")
-        self.status_label.pack(anchor="e")
 
-    def _build_controls(self, parent: ttk.Frame) -> None:
-        self._section(parent, self.tr("runtime"))
-        metrics = ttk.Frame(parent, style="Muted.TFrame", padding=12)
-        metrics.pack(fill="x", pady=(8, 18))
-        status = self._runtime_status()
-        self._metric(metrics, self.tr("whisper_ready"), status["whisper"])
-        self._metric(metrics, self.tr("ffmpeg_ready"), status["ffmpeg"])
-        self._metric(metrics, self.tr("openai_key"), status["openai"])
+    def _toggle_language(self) -> None:
+        self.ui_lang = "en" if self.ui_lang == "zh" else "zh"
+        self._retranslate()
 
-        self._section(parent, self.tr("input"))
-        self._label(parent, self.tr("video_format"), top=10)
-        ttk.Combobox(parent, textvariable=self.video_type, values=list(SUPPORTED_VIDEO_TYPES), state="readonly").pack(fill="x")
+    def _retranslate(self) -> None:
+        s = STRINGS[self.ui_lang]
+        self.setWindowTitle("Video Text Extractor")
+        self.title_label.setText(s["title"])
+        self.subtitle_label.setText(s["subtitle"])
+        self.lang_toggle.setText(s["lang_toggle"])
+        self.add_button.setText(f"➕ {s['add_videos']}")
+        self.status_badge.setText(s["status_ready"])
+        self.heading_label.setText(s["page_title"])
+        self.caption_label.setText(s["page_caption"])
+        self.open_folder_button.setText(f"\U0001f4c2 {s['open_folder']}")
+        self.settings_group.setTitle(s["settings"])
+        self.format_label.setText(s["video_format"])
+        self.language_label.setText(s["language"])
+        self.custom_label.setText(s["custom_code"])
+        self.model_label.setText(s["model"])
+        self.output_label.setText(s["output"])
+        self.folder_label.setText(s["output_folder"])
+        self.task_label.setText(s["task"])
+        self.transcribe_radio.setText(s["transcribe"])
+        self.translate_radio.setText(s["translate_en"])
+        self.queue_label.setText(s["queue"])
+        self.remove_button.setText(s["remove"])
+        self.clear_button.setText(s["clear"])
+        self.table.setHorizontalHeaderLabels([
+            s["col_video"], s["col_size"], s["col_output"], s["col_status"]
+        ])
+        self.preview_title.setText(s["preview"])
+        self.copy_button.setText(f"\U0001f4cb {s['copy_preview']}")
+        self.preview.setPlaceholderText(s["preview_placeholder"])
+        self.log_title.setText(s["log"])
+        self.start_button.setText(f"▶ {s['start']}")
+        self.cancel_button.setText(s["cancel"])
+        self._refresh_runtime()
 
-        self._label(parent, self.tr("video_file"), top=10)
-        row = ttk.Frame(parent, style="Surface.TFrame")
-        row.pack(fill="x")
-        ttk.Entry(row, textvariable=self.video_path).pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text=self.tr("browse"), command=self._browse_video).pack(side="left", padx=(8, 0))
-
-        quick = ttk.Frame(parent, style="Surface.TFrame")
-        quick.pack(fill="x", pady=(8, 18))
-        ttk.Button(quick, text=self.tr("use_41"), command=lambda: self._set_video(APP_DIR / "4-1.mp4")).pack(side="left")
-        ttk.Button(quick, text=self.tr("use_42"), command=lambda: self._set_video(APP_DIR / "4-2.mp4")).pack(side="left", padx=(8, 0))
-
-        self._section(parent, self.tr("settings"))
-        self._label(parent, self.tr("language"), top=10)
-        language_box = ttk.Combobox(
-            parent,
-            textvariable=self.transcript_language,
-            values=self._language_values(),
-            state="readonly",
-        )
-        language_box.pack(fill="x")
-        language_box.bind("<<ComboboxSelected>>", lambda _event: self._on_transcript_language_change())
-
-        self.custom_language_frame = ttk.Frame(parent, style="Surface.TFrame")
-        self._label(self.custom_language_frame, self.tr("custom_code"), top=8)
-        ttk.Entry(self.custom_language_frame, textvariable=self.custom_language).pack(fill="x")
-
-        self._label(parent, self.tr("model"), top=10)
-        ttk.Combobox(parent, textvariable=self.model, values=["tiny", "base", "small", "medium"], state="readonly").pack(fill="x")
-        ttk.Label(parent, text=self.tr("model_hint"), style="Hint.TLabel").pack(anchor="w", pady=(4, 0))
-
-        self._label(parent, self.tr("task"), top=10)
-        task_row = ttk.Frame(parent, style="Surface.TFrame")
-        task_row.pack(fill="x")
-        ttk.Radiobutton(task_row, text=self.tr("transcribe"), variable=self.task, value="transcribe").pack(side="left")
-        ttk.Radiobutton(task_row, text=self.tr("translate"), variable=self.task, value="translate").pack(side="left", padx=(14, 0))
-
-        self._section(parent, self.tr("output"), top=18)
-        self._label(parent, self.tr("output_format"), top=10)
-        fmt = ttk.Combobox(parent, textvariable=self.output_format, values=list(OUTPUT_FORMATS), state="readonly")
-        fmt.pack(fill="x")
-        fmt.bind("<<ComboboxSelected>>", lambda _event: self._suggest_output_path())
-
-        self._label(parent, self.tr("output_file"), top=10)
-        output_row = ttk.Frame(parent, style="Surface.TFrame")
-        output_row.pack(fill="x")
-        ttk.Entry(output_row, textvariable=self.output_path).pack(side="left", fill="x", expand=True)
-        ttk.Button(output_row, text=self.tr("save_as"), command=self._browse_output).pack(side="left", padx=(8, 0))
-
-        actions = ttk.Frame(parent, style="Surface.TFrame")
-        actions.pack(fill="x", pady=(18, 0))
-        self.start_button = ttk.Button(actions, text=self.tr("start"), style="Primary.TButton", command=self._start)
-        self.start_button.pack(side="left", fill="x", expand=True)
-        self.cancel_button = ttk.Button(actions, text=self.tr("cancel"), command=self._cancel, state="disabled")
-        self.cancel_button.pack(side="left", padx=(8, 0))
-        ttk.Button(parent, text=self.tr("open_folder"), command=self._open_output_folder).pack(fill="x", pady=(10, 0))
-
-    def _build_output(self, parent: ttk.Frame) -> None:
-        top = ttk.Frame(parent, style="Surface.TFrame")
-        top.pack(fill="x")
-        ttk.Label(top, text=self.tr("preview"), style="Section.TLabel").pack(side="left")
-        self.progress = ttk.Progressbar(top, mode="indeterminate", length=170)
-        self.progress.pack(side="right")
-
-        preview_frame = ttk.Frame(parent, style="Surface.TFrame")
-        preview_frame.pack(fill="both", expand=True, pady=(10, 16))
-        self.preview = tk.Text(
-            preview_frame,
-            wrap="word",
-            font=("Consolas", 10),
-            bg="#fbfdff",
-            fg="#111827",
-            insertbackground="#111827",
-            relief="solid",
-            bd=1,
-            padx=12,
-            pady=10,
-        )
-        preview_scroll = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview.yview)
-        self.preview.configure(yscrollcommand=preview_scroll.set)
-        self.preview.pack(side="left", fill="both", expand=True)
-        preview_scroll.pack(side="right", fill="y")
-        self.preview.insert(END, self.tr("latest"))
-
-        ttk.Label(parent, text=self.tr("log"), style="Section.TLabel").pack(anchor="w")
-        log_frame = ttk.Frame(parent, style="Surface.TFrame")
-        log_frame.pack(fill="x", pady=(10, 0))
-        self.log = tk.Text(
-            log_frame,
-            height=9,
-            wrap="word",
-            font=("Consolas", 9),
-            bg="#111827",
-            fg="#dbeafe",
-            insertbackground="#dbeafe",
-            relief="flat",
-            padx=12,
-            pady=10,
-        )
-        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
-        self.log.configure(yscrollcommand=log_scroll.set)
-        self.log.pack(side="left", fill="both", expand=True)
-        log_scroll.pack(side="right", fill="y")
-
-    def _runtime_status(self) -> dict[str, bool]:
+    def _refresh_runtime(self) -> None:
         from video_text_extractor import detect_tools
 
         status = detect_tools()
-        return {
-            "whisper": status.local_whisper,
-            "ffmpeg": bool(status.ffmpeg or status.imageio_ffmpeg),
-            "openai": status.openai_key,
-        }
+        s = STRINGS[self.ui_lang]
+        rows = [
+            (f"⚙ {s['local_whisper']}", status.local_whisper),
+            (f"\U0001f3a5 ffmpeg", bool(status.ffmpeg or status.imageio_ffmpeg)),
+            (f"\U0001f511 {s['openai_key']}", status.openai_key),
+        ]
+        self.runtime_list.clear()
+        for label, ok in rows:
+            text = f"{'  ✓' if ok else '  ✗'}  {label}"
+            item = QListWidgetItem(text)
+            if ok:
+                item.setForeground(QColor("#3fb950"))
+            else:
+                item.setForeground(QColor("#f0883e"))
+            self.runtime_list.addItem(item)
 
-    def _metric(self, parent: ttk.Frame, label: str, ok: bool) -> None:
-        frame = ttk.Frame(parent, style="Muted.TFrame")
-        frame.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        color = "#15803d" if ok else "#b45309"
-        value = self.tr("available") if ok else self.tr("missing")
-        ttk.Label(frame, text=label, style="Metric.TLabel").pack(anchor="w")
-        ttk.Label(frame, text=value, background="#f8fafc", foreground=color, font=("Segoe UI", 10, "bold")).pack(anchor="w")
-
-    def _section(self, parent: ttk.Frame, text: str, top: int = 0) -> None:
-        ttk.Label(parent, text=text, style="Section.TLabel").pack(anchor="w", pady=(top, 0))
-
-    def _label(self, parent: ttk.Frame, text: str, top: int = 0) -> None:
-        ttk.Label(parent, text=text).pack(anchor="w", pady=(top, 4))
-
-    def _language_display(self, name: str, code: str) -> str:
-        return name if not code else f"{name} ({code})"
-
-    def _language_values(self) -> list[str]:
-        values = []
-        current_display = self.transcript_language.get()
-        for name, code in LANGUAGE_OPTIONS:
-            value = self._language_display(name, code)
-            self.language_display_to_code[value] = code
-            values.append(value)
-        if current_display in values:
-            self.transcript_language.set(current_display)
-        else:
-            self.transcript_language.set(self._language_display("English", "en"))
-        return values
-
-    def _change_ui_language(self, value: str) -> None:
-        self.ui_language.set("en" if value == "English" else "zh")
-        self._build_ui()
-        self._suggest_output_path()
-
-    def _on_transcript_language_change(self) -> None:
-        self._toggle_custom_language()
-        self._suggest_output_path()
-
-    def _toggle_custom_language(self) -> None:
-        if not self.custom_language_frame:
-            return
-        if self._language_code(raw=True) == "custom":
-            self.custom_language_frame.pack(fill="x")
-        else:
-            self.custom_language_frame.pack_forget()
-
-    def _load_first_video(self) -> None:
+    def _load_sample_files(self) -> None:
         for name in ["4-2.mp4", "4-1.mp4"]:
-            candidate = APP_DIR / name
-            if candidate.exists():
-                self._set_video(candidate)
-                return
+            path = APP_DIR / name
+            if path.exists():
+                self.add_video_path(path)
 
-    def _set_video(self, path: Path) -> None:
-        if path.exists():
-            self.video_path.set(str(path))
-            self._suggest_output_path()
-        else:
-            messagebox.showwarning(self.tr("missing_file"), str(path))
+    def add_videos(self) -> None:
+        selected = self.format_combo.currentText()
+        pattern = VIDEO_FILTERS[selected]
+        s = STRINGS[self.ui_lang]
+        filters = f"{selected} ({pattern});;All files (*.*)"
+        paths, _ = QFileDialog.getOpenFileNames(self, s["add_videos"], str(APP_DIR), filters)
+        for raw_path in paths:
+            self.add_video_path(Path(raw_path))
 
-    def _browse_video(self) -> None:
-        patterns = SUPPORTED_VIDEO_TYPES[self.video_type.get()]
-        filetypes = [(self.video_type.get(), " ".join(patterns)), ("All files", "*.*")]
-        selected = filedialog.askopenfilename(initialdir=APP_DIR, title=self.tr("select_video"), filetypes=filetypes)
-        if selected:
-            self.video_path.set(selected)
-            self._suggest_output_path()
-
-    def _browse_output(self) -> None:
-        fmt_name = self.output_format.get()
-        extension = OUTPUT_FORMATS[fmt_name][1]
-        selected = filedialog.asksaveasfilename(
-            initialdir=APP_DIR,
-            initialfile=Path(self.output_path.get()).name or f"transcript{extension}",
-            title=self.tr("select_output"),
-            defaultextension=extension,
-            filetypes=[(fmt_name, f"*{extension}"), ("All files", "*.*")],
-        )
-        if selected:
-            self.output_path.set(selected)
-
-    def _suggest_output_path(self) -> None:
-        raw_video = self.video_path.get().strip()
-        if not raw_video:
+    def add_video_path(self, path: Path) -> None:
+        s = STRINGS[self.ui_lang]
+        if not path.exists():
+            QMessageBox.warning(self, s["missing_file"], s["missing_file_msg"].format(path))
             return
-        video = Path(raw_video)
-        fmt_name = self.output_format.get()
-        extension = OUTPUT_FORMATS[fmt_name][1]
-        language = self._language_code()
-        suffix = language or "auto"
-        self.output_path.set(str(video.with_name(f"{video.stem}_transcript_{suffix}{extension}")))
+        if any(job.video == path for job in self.jobs):
+            return
+        self.jobs.append(Job(video=path, output=self.output_path_for(path)))
+        self.refresh_table()
 
-    def _language_code(self, raw: bool = False) -> str | None:
-        code = self.language_display_to_code.get(self.transcript_language.get(), "")
-        if raw:
-            return code
+    def remove_selected(self) -> None:
+        rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
+        for row in rows:
+            if 0 <= row < len(self.jobs):
+                del self.jobs[row]
+        self.refresh_table()
+
+    def clear_queue(self) -> None:
+        if self.process and self.process.state() != QProcess.NotRunning:
+            return
+        self.jobs.clear()
+        self.refresh_table()
+
+    def choose_output_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output_dir.text())
+        if path:
+            self.output_dir.setText(path)
+
+    def refresh_outputs(self) -> None:
+        for job in self.jobs:
+            job.output = self.output_path_for(job.video)
+        self.refresh_table()
+
+    def output_path_for(self, video: Path) -> Path:
+        output_dir = Path(self.output_dir.text().strip() or APP_DIR)
+        fmt, suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
+        language = self.language_code() or "auto"
+        return output_dir / f"{video.stem}_transcript_{safe_part(language)}{suffix}"
+
+    def language_code(self) -> str | None:
+        code = self.language_to_code.get(self.language_combo.currentText(), "")
         if code == "custom":
-            return self.custom_language.get().strip() or None
+            return self.custom_language.text().strip() or None
         return code or None
 
-    def _command(self) -> list[str]:
-        video = Path(self.video_path.get().strip())
-        output = Path(self.output_path.get().strip())
-        fmt = OUTPUT_FORMATS[self.output_format.get()][0]
+    def _toggle_custom_language(self) -> None:
+        is_custom = self.language_to_code.get(self.language_combo.currentText()) == "custom"
+        self.custom_language.setVisible(is_custom)
+
+    def refresh_table(self) -> None:
+        self.table.setRowCount(len(self.jobs))
+        for row, job in enumerate(self.jobs):
+            values = [job.video.name, file_size(job.video), str(job.output), job.status]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col in {1, 3}:
+                    item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row, col, item)
+
+    def preview_selected_output(self) -> None:
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if not rows:
+            return
+        job = self.jobs[rows[0]]
+        if job.output.exists():
+            self.preview.setPlainText(job.output.read_text(encoding="utf-8", errors="replace"))
+        else:
+            s = STRINGS[self.ui_lang]
+            self.preview.setPlainText(s["output_will_be"].format(job.output))
+
+    def command_for(self, job: Job) -> list[str]:
+        fmt, _suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
         command = [
             sys.executable,
             "-u",
             str(EXTRACTOR),
-            str(video),
+            str(job.video),
             "--mode",
             "whisper",
             "--whisper-model",
-            self.model.get(),
+            self.model_combo.currentText(),
             "--format",
             fmt,
             "-o",
-            str(output),
+            str(job.output),
         ]
-        language = self._language_code()
+        language = self.language_code()
         if language:
             command.extend(["--language", language])
-        if self.task.get() == "translate":
+        if self.translate_radio.isChecked():
             command.extend(["--whisper-task", "translate"])
         return command
 
-    def _start(self) -> None:
-        video = Path(self.video_path.get().strip())
-        output = Path(self.output_path.get().strip())
-        if not video.exists():
-            messagebox.showerror(self.tr("missing_file"), self.tr("video_missing"))
+    def start_jobs(self) -> None:
+        s = STRINGS[self.ui_lang]
+        if not self.jobs:
+            QMessageBox.information(self, s["queue_empty"], s["queue_empty_msg"])
             return
-        if not output.name:
-            messagebox.showerror(self.tr("missing_file"), self.tr("output_missing"))
+        Path(self.output_dir.text()).mkdir(parents=True, exist_ok=True)
+        for job in self.jobs:
+            job.status = "Waiting"
+        self.active_index = None
+        self.log.clear()
+        self.preview.clear()
+        self.progress.setRange(0, 0)
+        self.status_badge.setText(s["running_status"])
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.refresh_table()
+        self.start_next_job()
+
+    def start_next_job(self) -> None:
+        next_index = None
+        for index, job in enumerate(self.jobs):
+            if job.status == "Waiting":
+                next_index = index
+                break
+        if next_index is None:
+            self.finish_batch()
             return
-        output.parent.mkdir(parents=True, exist_ok=True)
 
-        self._set_status("running")
-        if self.start_button:
-            self.start_button.configure(state="disabled")
-        if self.cancel_button:
-            self.cancel_button.configure(state="normal")
-        if self.progress:
-            self.progress.start(12)
-        if self.preview:
-            self.preview.delete("1.0", END)
-        if self.log:
-            self.log.delete("1.0", END)
-        self._append_log(self.tr("starting") + "\n")
+        self.active_index = next_index
+        job = self.jobs[next_index]
+        job.status = "Running"
+        self.refresh_table()
+        self.table.selectRow(next_index)
+        s = STRINGS[self.ui_lang]
+        self.append_log(f"\n{s['starting'].format(job.video.name)}\n")
 
-        self.worker = threading.Thread(target=self._run_process, args=(self._command(), output), daemon=True)
-        self.worker.start()
+        self.process = QProcess(self)
+        self.process.setWorkingDirectory(str(APP_DIR))
+        self.process.setProcessChannelMode(QProcess.MergedChannels)
+        self.process.readyReadStandardOutput.connect(self.read_process_output)
+        self.process.finished.connect(self.process_finished)
+        command = self.command_for(job)
+        self.process.start(command[0], command[1:])
 
-    def _run_process(self, command: list[str], output: Path) -> None:
-        try:
-            self.process = subprocess.Popen(
-                command,
-                cwd=APP_DIR,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-            )
-            assert self.process.stdout is not None
-            for line in self.process.stdout:
-                self.after(0, self._append_log, line)
+    def read_process_output(self) -> None:
+        if not self.process:
+            return
+        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        self.append_log(text)
 
-            return_code = self.process.wait()
-            if return_code == 0:
-                self.after(0, self._finish_success, output)
-            else:
-                self.after(0, self._finish_error, f"Process exited with code {return_code}.")
-        except Exception as exc:
-            self.after(0, self._finish_error, f"{type(exc).__name__}: {exc}")
-        finally:
-            self.process = None
+    def process_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
+        if self.active_index is None:
+            return
+        job = self.jobs[self.active_index]
+        s = STRINGS[self.ui_lang]
+        if exit_code == 0:
+            job.status = s["done_status"]
+            self.append_log(f"{s['saved'].format(job.output)}\n")
+            if job.output.exists():
+                self.preview.setPlainText(job.output.read_text(encoding="utf-8", errors="replace"))
+        else:
+            job.status = s["failed_status"]
+            self.append_log(f"{s['failed_code'].format(exit_code)}\n")
+        self.refresh_table()
+        QTimer.singleShot(120, self.start_next_job)
 
-    def _finish_success(self, output: Path) -> None:
-        self._set_status("done")
-        self._finish_buttons()
-        self._append_log(f"\n{self.tr('saved')}: {output}\n")
-        if output.exists() and self.preview:
-            content = output.read_text(encoding="utf-8", errors="replace")
-            self.preview.delete("1.0", END)
-            self.preview.insert(END, content)
-        messagebox.showinfo(self.tr("done_box"), f"{self.tr('saved')}:\n{output}")
+    def finish_batch(self) -> None:
+        s = STRINGS[self.ui_lang]
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
+        self.status_badge.setText(s["done_status"])
+        self.start_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        self.process = None
 
-    def _finish_error(self, message: str) -> None:
-        self._set_status("failed")
-        self._finish_buttons()
-        self._append_log(f"\n{message}\n")
-        messagebox.showerror(self.tr("failed_box"), message)
+    def cancel_current(self) -> None:
+        if self.process and self.process.state() != QProcess.NotRunning:
+            self.process.kill()
+        s = STRINGS[self.ui_lang]
+        for job in self.jobs:
+            if job.status in {"Waiting", "Running"}:
+                job.status = s["cancelled_status"]
+        self.refresh_table()
+        self.finish_batch()
+        self.status_badge.setText(s["cancelled_status"])
 
-    def _finish_buttons(self) -> None:
-        if self.progress:
-            self.progress.stop()
-        if self.start_button:
-            self.start_button.configure(state="normal")
-        if self.cancel_button:
-            self.cancel_button.configure(state="disabled")
+    def append_log(self, text: str) -> None:
+        self.log.moveCursor(self.log.textCursor().MoveOperation.End)
+        self.log.insertPlainText(text)
+        self.log.moveCursor(self.log.textCursor().MoveOperation.End)
 
-    def _cancel(self) -> None:
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            self._append_log("\nCancel requested.\n")
-            self._set_status("running")
+    def copy_preview(self) -> None:
+        QApplication.clipboard().setText(self.preview.toPlainText())
 
-    def _set_status(self, key: str) -> None:
-        self.status_key = key
-        if self.status_label:
-            self.status_label.configure(text=self.tr(key))
-
-    def _append_log(self, text: str) -> None:
-        if self.log:
-            self.log.insert(END, text)
-            self.log.see(END)
-
-    def _open_output_folder(self) -> None:
-        path = Path(self.output_path.get().strip()).parent if self.output_path.get().strip() else APP_DIR
+    def open_output_folder(self) -> None:
+        path = Path(self.output_dir.text().strip() or APP_DIR)
         path.mkdir(parents=True, exist_ok=True)
         os.startfile(path)
 
 
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setFont(QFont("Segoe UI", 10))
+    window = VideoTextWindow()
+    window.show()
+    return app.exec()
+
+
 if __name__ == "__main__":
-    app = VideoTextApp()
-    app.mainloop()
+    raise SystemExit(main())
