@@ -1,0 +1,11 @@
+{
+  "name": "video-text-extractor-ocr",
+  "private": true,
+  "scripts": {
+    "ocr": "node local_video_ocr.js"
+  },
+  "dependencies": {
+    "playwright": "^1.59.1",
+    "tesseract.js": "^7.0.0"
+  }
+}
