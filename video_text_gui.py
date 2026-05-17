@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, asdict
+import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QFont, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -292,33 +294,42 @@ def file_size(path: Path) -> str:
     size = path.stat().st_size
     if size >= 1024 * 1024 * 1024:
         return f"{size / 1024 / 1024 / 1024:.2f} GB"
-    return f"{size / 1024 / 1024:.1f} MB"
+    if size >= 1024 * 1024:
+        return f"{size / 1024 / 1024:.1f} MB"
+    return f"{size / 1024:.1f} KB"
 
 
 THUMB_CACHE: dict[Path, QPixmap] = {}
+
+
+def python_console_executable() -> str:
+    executable = Path(sys.executable)
+    if sys.platform == "win32" and executable.name.lower() == "pythonw.exe":
+        python_exe = executable.with_name("python.exe")
+        if python_exe.exists():
+            return str(python_exe)
+    return sys.executable
 
 
 def get_video_thumbnail(path: Path) -> QPixmap | None:
     if path in THUMB_CACHE:
         return THUMB_CACHE[path]
     try:
-        from video_text_extractor import detect_tools
+        from video_text_extractor import detect_tools, ffmpeg_command, local_temp_dir
         status = detect_tools()
-        ffmpeg = status.ffmpeg or (status.imageio_ffmpeg and str(Path(__import__("imageio_ffmpeg").get_ffmpeg_exe())))
+        ffmpeg = ffmpeg_command(status)
         if not ffmpeg:
             return None
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp_path = tmp.name
-        subprocess.run(
-            [ffmpeg, "-y", "-i", str(path), "-vframes", "1", "-vf", "scale=80:-1", tmp_path],
-            capture_output=True, timeout=10,
-        )
-        pixmap = QPixmap(tmp_path)
-        os.unlink(tmp_path)
-        if not pixmap.isNull():
-            THUMB_CACHE[path] = pixmap
-            return pixmap
+        with local_temp_dir(APP_DIR / ".video_text_cache", "thumb_") as temp_dir:
+            tmp_path = temp_dir / "frame.jpg"
+            subprocess.run(
+                [ffmpeg, "-y", "-i", str(path), "-vframes", "1", "-vf", "scale=80:-1", str(tmp_path)],
+                capture_output=True, timeout=10,
+            )
+            pixmap = QPixmap(str(tmp_path))
+            if not pixmap.isNull():
+                THUMB_CACHE[path] = pixmap
+                return pixmap
     except Exception:
         pass
     return None
@@ -360,7 +371,13 @@ class VideoTextWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.jobs: list[Job] = []
-        self.active_processes: dict[int, QProcess] = {}
+        self.active_processes: dict[int, subprocess.Popen[str]] = {}
+        self.process_outputs: queue.Queue[tuple[int, int, str]] = queue.Queue()
+        self.process_finishes: queue.Queue[tuple[int, int, int]] = queue.Queue()
+        self.process_generation = 0
+        self.process_pump = QTimer(self)
+        self.process_pump.setInterval(80)
+        self.process_pump.timeout.connect(self._drain_process_events)
         self.max_parallel = 1
         self.language_to_code: dict[str, str] = {}
         self.ui_lang = "zh"
@@ -630,13 +647,13 @@ class VideoTextWindow(QMainWindow):
         self.folder_label = QLabel()
         self.output_dir = QLineEdit(str(APP_DIR / "outputs"))
         self.output_dir.textChanged.connect(self.refresh_outputs)
-        browse_output = QToolButton()
-        browse_output.setText("...")
-        browse_output.clicked.connect(self.choose_output_dir)
+        self.output_browse_button = QToolButton()
+        self.output_browse_button.setText("...")
+        self.output_browse_button.clicked.connect(self.choose_output_dir)
         output_row = QHBoxLayout()
         output_row.setContentsMargins(0, 0, 0, 0)
         output_row.addWidget(self.output_dir, 1)
-        output_row.addWidget(browse_output)
+        output_row.addWidget(self.output_browse_button)
         settings_layout.addWidget(self.folder_label, 6, 0)
         settings_layout.addLayout(output_row, 6, 1)
 
@@ -950,7 +967,7 @@ class VideoTextWindow(QMainWindow):
         self.subtitle_label.setText(s["subtitle"])
         self.lang_toggle.setText(s["lang_toggle"])
         self.add_button.setText(f"➕ {s['add_videos']}")
-        self.status_badge.setText(s["status_ready"])
+        self.status_badge.setText(self._batch_status_text(s))
         self.heading_label.setText(s["page_title"])
         self.caption_label.setText(s["page_caption"])
         self.open_folder_button.setText(f"\U0001f4c2 {s['open_folder']}")
@@ -983,16 +1000,32 @@ class VideoTextWindow(QMainWindow):
         self.history_label.setText(s["history"])
         self.history_load_btn.setText(s["history_load"])
         self.history_clear_btn.setText(s["history_clear"])
+        self._refresh_history_list()
         self._refresh_runtime()
 
+    def _batch_status_text(self, strings: dict[str, str]) -> str:
+        if self.active_processes:
+            return strings["running_status"]
+        statuses = {job.status for job in self.jobs}
+        failed_statuses = {STRINGS["zh"]["failed_status"], STRINGS["en"]["failed_status"]}
+        cancelled_statuses = {STRINGS["zh"]["cancelled_status"], STRINGS["en"]["cancelled_status"]}
+        done_statuses = {STRINGS["zh"]["done_status"], STRINGS["en"]["done_status"]}
+        if statuses and any(status in failed_statuses for status in statuses):
+            return strings["failed_status"]
+        if statuses and statuses <= cancelled_statuses:
+            return strings["cancelled_status"]
+        if statuses and statuses <= done_statuses:
+            return strings["done_status"]
+        return strings["ready_status"]
+
     def _refresh_runtime(self) -> None:
-        from video_text_extractor import detect_tools
+        from video_text_extractor import detect_tools, ffmpeg_command
 
         status = detect_tools()
         s = STRINGS[self.ui_lang]
         rows = [
             (f"⚙ {s['local_whisper']}", status.local_whisper),
-            (f"\U0001f3a5 ffmpeg", bool(status.ffmpeg or status.imageio_ffmpeg)),
+            (f"\U0001f3a5 ffmpeg", bool(ffmpeg_command(status))),
             (f"\U0001f511 {s['openai_key']}", status.openai_key),
             (f"\U0001f7e2 {s['gpu']}", status.cuda_gpu),
         ]
@@ -1008,22 +1041,22 @@ class VideoTextWindow(QMainWindow):
 
     def _on_mode_changed(self) -> None:
         mode = self.mode_combo.currentData()
-        is_whisper = mode == "whisper"
-        is_audio = mode == "audio"
+        uses_whisper_settings = mode in {"whisper", "auto"}
         is_subtitle = mode == "subtitle"
-        self.model_label.setVisible(is_whisper)
-        self.model_combo.setVisible(is_whisper)
-        self.model_hint.setVisible(is_whisper)
-        self.task_label.setVisible(is_whisper)
-        self.transcribe_radio.setVisible(is_whisper)
-        self.translate_radio.setVisible(is_whisper)
+        self.model_label.setVisible(uses_whisper_settings)
+        self.model_combo.setVisible(uses_whisper_settings)
+        self.model_hint.setVisible(uses_whisper_settings)
+        self.task_label.setVisible(uses_whisper_settings)
+        self.transcribe_radio.setVisible(uses_whisper_settings)
+        self.translate_radio.setVisible(uses_whisper_settings)
         self.language_label.setVisible(mode not in {"subtitle", "ocr"})
         self.language_combo.setVisible(mode not in {"subtitle", "ocr"})
         self._toggle_custom_language()
         self.output_label.setVisible(not is_subtitle)
         self.output_combo.setVisible(not is_subtitle)
-        self.parallel_label.setVisible(is_whisper)
-        self.parallel_spin.setVisible(is_whisper)
+        self.parallel_label.setVisible(uses_whisper_settings)
+        self.parallel_spin.setVisible(uses_whisper_settings)
+        self.refresh_outputs()
 
     def _on_parallel_changed(self, value: int) -> None:
         self.max_parallel = value
@@ -1070,6 +1103,8 @@ class VideoTextWindow(QMainWindow):
             self.add_video_path(Path(raw_path))
 
     def add_video_path(self, path: Path) -> None:
+        if self.active_processes:
+            return
         s = STRINGS[self.ui_lang]
         if not path.exists():
             QMessageBox.warning(self, s["missing_file"], s["missing_file_msg"].format(path))
@@ -1082,6 +1117,8 @@ class VideoTextWindow(QMainWindow):
         self._update_model_hint(path)
 
     def remove_selected(self) -> None:
+        if self.active_processes:
+            return
         rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
         for row in rows:
             if 0 <= row < len(self.jobs):
@@ -1100,14 +1137,20 @@ class VideoTextWindow(QMainWindow):
             self.output_dir.setText(path)
 
     def refresh_outputs(self) -> None:
+        mode = self.mode_combo.currentData()
         for job in self.jobs:
+            job.mode = mode
             job.output = self.output_path_for(job.video)
-        self.refresh_table()
+        if hasattr(self, "table"):
+            self.refresh_table()
 
     def output_path_for(self, video: Path) -> Path:
         output_dir = Path(self.output_dir.text().strip() or APP_DIR)
-        if self.mode_combo.currentData() == "subtitle":
+        mode = self.mode_combo.currentData()
+        if mode == "subtitle":
             return output_dir / f"{video.stem}_subtitles.srt"
+        if mode == "ocr":
+            return output_dir / f"{video.stem}_ocr.txt"
         fmt, suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
         language = self.language_code() or "auto"
         return output_dir / f"{video.stem}_transcript_{safe_part(language)}{suffix}"
@@ -1151,13 +1194,13 @@ class VideoTextWindow(QMainWindow):
         mode = job.mode
         fmt, _suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
         command = [
-            sys.executable, "-u", str(EXTRACTOR),
+            python_console_executable(), "-u", str(EXTRACTOR),
             str(job.video),
             "--mode", mode,
             "--format", fmt,
             "-o", str(job.output),
         ]
-        if mode == "whisper":
+        if mode in {"whisper", "auto"}:
             command.extend(["--whisper-model", self.model_combo.currentText()])
             language = self.language_code()
             if language:
@@ -1165,10 +1208,6 @@ class VideoTextWindow(QMainWindow):
             if self.translate_radio.isChecked():
                 command.extend(["--whisper-task", "translate"])
         elif mode == "audio":
-            language = self.language_code()
-            if language:
-                command.extend(["--language", language])
-        elif mode == "ocr":
             language = self.language_code()
             if language:
                 command.extend(["--language", language])
@@ -1181,7 +1220,14 @@ class VideoTextWindow(QMainWindow):
         if not self.jobs:
             QMessageBox.information(self, s["queue_empty"], s["queue_empty_msg"])
             return
-        Path(self.output_dir.text()).mkdir(parents=True, exist_ok=True)
+        try:
+            Path(self.output_dir.text().strip() or APP_DIR).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(self, s["missing_file"], str(exc))
+            return
+        self.refresh_outputs()
+        self.process_generation += 1
+        self._clear_process_queues()
         for job in self.jobs:
             job.status = "Waiting"
         self.log.clear()
@@ -1190,6 +1236,7 @@ class VideoTextWindow(QMainWindow):
         self.status_badge.setText(s["running_status"])
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self._set_editing_enabled(False)
         self.refresh_table()
         self._save_history_entry()
         self._fill_parallel_slots()
@@ -1215,25 +1262,67 @@ class VideoTextWindow(QMainWindow):
         s = STRINGS[self.ui_lang]
         self.append_log(f"\n{s['starting'].format(job.video.name)}\n")
 
-        process = QProcess(self)
-        process.setWorkingDirectory(str(APP_DIR))
-        process.setProcessChannelMode(QProcess.MergedChannels)
-        env = process.processEnvironment()
-        env.insert("PYTHONIOENCODING", "utf-8")
-        process.setProcessEnvironment(env)
-
-        process.setProperty("job_index", index)
-        process.readyReadStandardOutput.connect(lambda p=process: self._read_output(p))
-        process.finished.connect(lambda code, status, p=process: self._job_finished(p, code))
-
         command = self.command_for(job)
-        process.start(command[0], command[1:])
-        self.active_processes[index] = process
+        generation = self.process_generation
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=str(APP_DIR),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                creationflags=creationflags,
+            )
+        except OSError as exc:
+            self._job_start_failed(index, str(exc))
+            return
 
-    def _read_output(self, process: QProcess) -> None:
-        text = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        self.append_log(text)
-        self._parse_progress(text)
+        self.active_processes[index] = process
+        threading.Thread(target=self._read_process_stream, args=(generation, index, process), daemon=True).start()
+        self.process_pump.start()
+
+    def _read_process_stream(self, generation: int, index: int, process: subprocess.Popen[str]) -> None:
+        exit_code = 1
+        try:
+            if process.stdout is not None:
+                for text in process.stdout:
+                    self.process_outputs.put((generation, index, text))
+            exit_code = process.wait()
+        except Exception as exc:
+            self.process_outputs.put((generation, index, f"Process error: {exc}\n"))
+            polled = process.poll()
+            exit_code = 1 if polled is None else polled
+        self.process_finishes.put((generation, index, exit_code))
+
+    def _drain_process_events(self) -> None:
+        while True:
+            try:
+                generation, _index, text = self.process_outputs.get_nowait()
+            except queue.Empty:
+                break
+            if generation != self.process_generation:
+                continue
+            self.append_log(text)
+            self._parse_progress(text)
+
+        while True:
+            try:
+                generation, index, exit_code = self.process_finishes.get_nowait()
+            except queue.Empty:
+                break
+            if generation != self.process_generation:
+                continue
+            self._job_finished(index, exit_code)
+
+        if not self.active_processes:
+            self.process_pump.stop()
 
     def _parse_progress(self, text: str) -> None:
         match = re.search(r"(\d+)%\|.*?(\d+)/(\d+)", text)
@@ -1242,9 +1331,8 @@ class VideoTextWindow(QMainWindow):
             self.progress.setRange(0, 100)
             self.progress.setValue(pct)
 
-    def _job_finished(self, process: QProcess, exit_code: int) -> None:
-        index = process.property("job_index")
-        if index is None or index not in self.active_processes:
+    def _job_finished(self, index: int, exit_code: int) -> None:
+        if index is None or index not in self.active_processes or index >= len(self.jobs):
             return
         del self.active_processes[index]
 
@@ -1260,24 +1348,39 @@ class VideoTextWindow(QMainWindow):
             self.append_log(f"{s['failed_code'].format(exit_code)}\n")
         self.refresh_table()
 
-        if self.active_processes:
-            self._fill_parallel_slots()
-        else:
+        self._fill_parallel_slots()
+        if not self.active_processes and self._next_waiting_index() is None:
+            self.finish_batch()
+
+    def _job_start_failed(self, index: int, message: str) -> None:
+        if index >= len(self.jobs):
+            return
+        s = STRINGS[self.ui_lang]
+        self.jobs[index].status = s["failed_status"]
+        self.append_log(f"Process error: {message}\n")
+        self.refresh_table()
+        self._fill_parallel_slots()
+        if not self.active_processes and self._next_waiting_index() is None:
             self.finish_batch()
 
     def finish_batch(self) -> None:
         s = STRINGS[self.ui_lang]
+        failed_statuses = {STRINGS["zh"]["failed_status"], STRINGS["en"]["failed_status"]}
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
-        self.status_badge.setText(s["done_status"])
+        self.status_badge.setText(s["failed_status"] if any(job.status in failed_statuses for job in self.jobs) else s["done_status"])
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self._set_editing_enabled(True)
 
     def cancel_all(self) -> None:
         for process in self.active_processes.values():
-            if process.state() != QProcess.NotRunning:
+            if process.poll() is None:
                 process.kill()
         self.active_processes.clear()
+        self.process_generation += 1
+        self._clear_process_queues()
+        self.process_pump.stop()
         s = STRINGS[self.ui_lang]
         for job in self.jobs:
             if job.status in {"Waiting", "Running"}:
@@ -1285,6 +1388,42 @@ class VideoTextWindow(QMainWindow):
         self.refresh_table()
         self.finish_batch()
         self.status_badge.setText(s["cancelled_status"])
+
+    def closeEvent(self, event) -> None:
+        if self.active_processes:
+            self.cancel_all()
+        super().closeEvent(event)
+
+    def _clear_process_queues(self) -> None:
+        for events in (self.process_outputs, self.process_finishes):
+            while True:
+                try:
+                    events.get_nowait()
+                except queue.Empty:
+                    break
+
+    def _set_editing_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self.add_button,
+            self.remove_button,
+            self.clear_button,
+            self.history_load_btn,
+            self.history_clear_btn,
+            self.mode_combo,
+            self.format_combo,
+            self.language_combo,
+            self.custom_language,
+            self.model_combo,
+            self.output_combo,
+            self.output_dir,
+            self.output_browse_button,
+            self.transcribe_radio,
+            self.translate_radio,
+            self.parallel_spin,
+            self.burn_button,
+            self.save_preview_btn,
+        ):
+            widget.setEnabled(enabled)
 
     # --- Progress & log ---
 
@@ -1319,10 +1458,11 @@ class VideoTextWindow(QMainWindow):
     # --- Burn subtitles ---
 
     def burn_subtitles(self) -> None:
-        from video_text_extractor import detect_tools
+        from video_text_extractor import detect_tools, ffmpeg_command
         s = STRINGS[self.ui_lang]
         status = detect_tools()
-        if not status.ffmpeg:
+        ffmpeg = ffmpeg_command(status)
+        if not ffmpeg:
             QMessageBox.warning(self, s["burn_title"], s["burn_ffmpeg_missing"])
             return
 
@@ -1342,9 +1482,9 @@ class VideoTextWindow(QMainWindow):
         output_path = video_p.parent / f"{video_p.stem}_subtitled.mp4"
 
         cmd = [
-            status.ffmpeg, "-y",
+            ffmpeg, "-y",
             "-i", video_path,
-            "-vf", f"subtitles={srt_path.replace(chr(92), '/')}",
+            "-vf", f"subtitles='{self._ffmpeg_filter_path(srt_path)}'",
             "-c:a", "copy",
             str(output_path),
         ]
@@ -1358,6 +1498,10 @@ class VideoTextWindow(QMainWindow):
                 self.append_log(f"ffmpeg error: {result.stderr[-500:]}\n")
         except Exception as e:
             self.append_log(f"Error: {e}\n")
+
+    def _ffmpeg_filter_path(self, path: str) -> str:
+        value = Path(path).resolve().as_posix()
+        return value.replace("\\", "/").replace(":", r"\:").replace("'", r"\'").replace(" ", r"\ ")
 
     # --- History ---
 
@@ -1400,15 +1544,52 @@ class VideoTextWindow(QMainWindow):
             self.history_list.addItem(f"[{time_str}] {mode} | {files}")
 
     def _load_selected_history(self) -> None:
+        if self.active_processes:
+            return
         row = self.history_list.currentRow()
         if row < 0 or row >= len(self.history):
             return
         entry = self.history[row]
+        self._restore_history_settings(entry)
         for file_str in entry.get("files", []):
             p = Path(file_str)
             if p.exists() and not any(j.video == p for j in self.jobs):
-                self.jobs.append(Job(video=p, output=self.output_path_for(p), mode=entry.get("mode", "whisper")))
+                self.jobs.append(Job(video=p, output=self.output_path_for(p), mode=self.mode_combo.currentData()))
         self.refresh_table()
+
+    def _restore_history_settings(self, entry: dict) -> None:
+        self._set_combo_data(self.mode_combo, entry.get("mode", "whisper"))
+        self.model_combo.setCurrentText(entry.get("model", "base"))
+        self._set_combo_text(self.output_combo, entry.get("format", "TXT"))
+        self._set_language_code(entry.get("language", "auto"))
+        self.translate_radio.setChecked(bool(entry.get("translate", False)))
+        self.transcribe_radio.setChecked(not self.translate_radio.isChecked())
+        self.refresh_outputs()
+
+    def _set_combo_data(self, combo: QComboBox, data: str) -> None:
+        for i in range(combo.count()):
+            if combo.itemData(i) == data:
+                combo.setCurrentIndex(i)
+                return
+
+    def _set_combo_text(self, combo: QComboBox, text: str) -> None:
+        index = combo.findText(text)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _set_language_code(self, code: str) -> None:
+        normalized = "" if code in {"", "auto", None} else str(code)
+        for i in range(self.language_combo.count()):
+            text = self.language_combo.itemText(i)
+            if self.language_to_code.get(text) == normalized:
+                self.language_combo.setCurrentIndex(i)
+                return
+        for i in range(self.language_combo.count()):
+            text = self.language_combo.itemText(i)
+            if self.language_to_code.get(text) == "custom":
+                self.language_combo.setCurrentIndex(i)
+                self.custom_language.setText(normalized)
+                return
 
     def _clear_history(self) -> None:
         self.history.clear()
