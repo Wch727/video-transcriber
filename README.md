@@ -15,6 +15,8 @@ A local video-to-text tool with a desktop GUI and CLI. Uses OpenAI Whisper local
 
 - **Desktop GUI** — Add video files, choose language/model/format, batch process with one click.
 - **桌面 GUI** — 添加视频，选择语言/模型/格式，一键批量处理。
+- **5 Transcription Modes** — Local Whisper, OpenAI API, embedded subtitle extraction, visual OCR, auto-select best.
+- **5 种转写模式** — 本地 Whisper、OpenAI API、内嵌字幕提取、画面 OCR、自动选择最佳方式。
 - **Auto Language Detection** — Whisper automatically detects the spoken language.
 - **自动识别语言** — Whisper 自动检测视频中的语音语言。
 - **Translate to English** — Translate any language speech into English text.
@@ -23,6 +25,18 @@ A local video-to-text tool with a desktop GUI and CLI. Uses OpenAI Whisper local
 - **55+ 种语言** — 英语、中文、日语、韩语、西班牙语、法语、德语、阿拉伯语、印地语、泰语等。
 - **Multiple Output Formats** — TXT, SRT (subtitles), VTT (web subtitles), JSON (full metadata).
 - **多种输出格式** — TXT、SRT（字幕）、VTT（Web 字幕）、JSON（完整元数据）.
+- **Drag & Drop** — Drag video files directly into the window to add them.
+- **拖拽添加** — 直接把视频文件拖到窗口即可添加。
+- **Real-time Progress** — Progress bar shows actual percentage from Whisper.
+- **实时进度** — 进度条显示 Whisper 的真实转写百分比。
+- **Parallel Processing** — Run 1-4 transcription jobs simultaneously.
+- **并行转写** — 同时运行 1-4 个转写任务。
+- **Burn Subtitles** — Hardcode SRT subtitles into video using ffmpeg.
+- **烧录字幕** — 用 ffmpeg 把 SRT 字幕硬编码到视频中。
+- **Model Auto-recommend** — Suggests the best Whisper model based on video duration.
+- **模型自动推荐** — 根据视频时长推荐最合适的 Whisper 模型。
+- **Transcription History** — Save and reload past transcription jobs with parameters.
+- **转写历史** — 保存和加载历史转写记录及参数。
 - **Local & Offline** — Videos stay on your machine. Whisper models are cached after first download.
 - **本地离线** — 视频不离开本机，Whisper 模型首次下载后可离线复用。
 - **CLI Mode** — Scriptable batch transcription for power users.
@@ -56,29 +70,40 @@ Double-click `start_video_text_gui.bat` or run:
 python video_text_gui.py
 ```
 
-### GUI 使用说明 / GUI Guide
+### GUI Guide / GUI 使用说明
 
-**界面布局：**
-- **左侧边栏** — 状态检测、添加视频按钮、语言切换
-- **右侧主区域** — 设置面板、队列列表、预览窗口、日志
+**Layout / 界面布局：**
+- **Left sidebar** — Runtime status, add videos button, language toggle.
+- **左侧边栏** — 运行状态检测、添加视频按钮、界面语言切换。
+- **Left panel** — Settings: mode, format, language, model, output, task, parallel count.
+- **左侧设置面板** — 模式、格式、语言、模型、输出、任务、并行数。
+- **Right panel** — Queue table, preview area, log, and history.
+- **右侧主区域** — 队列表格、预览区、日志、历史记录。
 
-**基本操作步骤：**
+**Steps / 操作步骤：**
 
-1. **添加视频** — 点击侧边栏 "添加视频" 按钮，选择视频文件
-2. **选择语言** — 在设置面板的 "语言" 下拉框中选择：
-   - `Auto detect` — 自动识别语音语言（推荐）
-   - 具体语言如 `English (en)`、`Chinese (zh)` 等
-   - `Custom code` — 输入任意 Whisper 支持的语言代码
-3. **选择模型** — `tiny` 最快，`base` 均衡，`small`/`medium` 更准但更慢
-4. **选择输出格式** — TXT、SRT、VTT、JSON
-5. **选择任务** — "转写"（原语言）或 "翻译成英文"
-6. **点击 "开始"** — 队列中的视频会依次处理
+1. **Add videos** — Click the sidebar button, or drag video files into the window.
+   **添加视频** — 点击侧边栏按钮，或直接拖拽视频文件到窗口。
+2. **Choose mode** — Whisper (local), OpenAI API, subtitles, OCR, or auto.
+   **选择模式** — Whisper（本地）、OpenAI API、字幕提取、OCR 或自动。
+3. **Choose language** — Auto detect, specific language, or custom code.
+   **选择语言** — 自动识别、指定语言或自定义代码。
+4. **Choose model** — `tiny` fastest, `base` balanced, `small`/`medium` more accurate.
+   **选择模型** — `tiny` 最快，`base` 均衡，`small`/`medium` 更准。
+5. **Choose output** — TXT, SRT, VTT, or JSON.
+   **选择输出格式** — TXT、SRT、VTT 或 JSON。
+6. **Choose task** — Transcribe (original language) or translate to English.
+   **选择任务** — 转写（原语言）或翻译成英文。
+7. **Click Start** — Jobs process in the queue. Progress shows real percentage.
+   **点击开始** — 队列中的任务依次处理，进度条显示真实百分比。
 
-**其他功能：**
-- 切换界面语言：点击侧边栏的 🌐 按钮切换中文/英文
-- 预览结果：转写完成后右侧预览区自动显示内容
-- 复制结果：点击 "复制预览" 按钮
-- 打开输出目录：点击右上角 "打开输出目录" 按钮
+**Other / 其他：**
+- Burn subtitles: click the red "Burn subtitles" button, select video + SRT file.
+  烧录字幕：点击红色"烧录字幕"按钮，选择视频和 SRT 文件。
+- History: double-click a past record in the history panel to reload it.
+  历史记录：双击历史面板中的记录可重新加载。
+- Parallel: set 1-4 in the "Parallel" spinner for concurrent jobs.
+  并行数：在"并行数"中设置 1-4，多个任务同时处理。
 
 ---
 
@@ -106,6 +131,12 @@ Translate to English:
 
 ```powershell
 python video_text_extractor.py video.mp4 --mode whisper --whisper-task translate --format vtt -o translated.vtt
+```
+
+Extract embedded subtitles:
+
+```powershell
+python video_text_extractor.py video.mp4 --mode subtitle
 ```
 
 ### CLI Options / 命令行参数
