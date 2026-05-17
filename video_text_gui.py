@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QLinearGradient, QPalette
+from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -40,6 +43,9 @@ from PySide6.QtWidgets import (
 
 APP_DIR = Path(__file__).resolve().parent
 EXTRACTOR = APP_DIR / "video_text_extractor.py"
+HISTORY_FILE = APP_DIR / ".transcribe_history.json"
+
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
 VIDEO_FILTERS = {
     "All supported": "*.mp4 *.mov *.mkv *.webm *.m4v *.avi",
@@ -50,6 +56,14 @@ VIDEO_FILTERS = {
     "M4V": "*.m4v",
     "AVI": "*.avi",
 }
+
+MODES = [
+    ("whisper", "Local Whisper"),
+    ("audio", "OpenAI API"),
+    ("subtitle", "Embedded subtitles"),
+    ("ocr", "Visual OCR"),
+    ("auto", "Auto (best)"),
+]
 
 LANGUAGES = [
     ("Auto detect", ""),
@@ -136,6 +150,7 @@ STRINGS = {
         "page_caption": "批量处理视频，选择语言，导出文本或字幕。",
         "open_folder": "打开输出目录",
         "settings": "设置",
+        "mode": "模式",
         "video_format": "视频格式",
         "language": "语言",
         "custom_code": "自定义代码",
@@ -145,6 +160,7 @@ STRINGS = {
         "task": "任务",
         "transcribe": "转写",
         "translate_en": "翻译成英文",
+        "parallel_jobs": "并行数",
         "queue": "队列",
         "remove": "移除",
         "clear": "清空",
@@ -158,10 +174,20 @@ STRINGS = {
         "log": "日志",
         "start": "开始",
         "cancel": "取消",
+        "burn_sub": "烧录字幕",
+        "history": "历史记录",
+        "history_load": "加载",
+        "history_clear": "清空历史",
         "queue_empty": "队列为空",
         "queue_empty_msg": "请先添加至少一个视频。",
         "missing_file": "文件缺失",
         "missing_file_msg": "找不到文件：\n{}",
+        "burn_title": "烧录字幕到视频",
+        "burn_need_srt": "请先选择一个 SRT 输出的转写任务。",
+        "burn_ffmpeg_missing": "需要 ffmpeg 才能烧录字幕。",
+        "burn_done": "字幕已烧录：\n{}",
+        "burn_input_title": "选择视频文件",
+        "burn_srt_title": "选择 SRT 字幕文件",
         "lang_toggle": "EN",
         "ready_status": "就绪",
         "running_status": "运行中",
@@ -172,6 +198,8 @@ STRINGS = {
         "saved": "已保存：{}",
         "failed_code": "失败，退出码 {}",
         "output_will_be": "输出将保存到：\n{}",
+        "suggest_model": "推荐模型: {}",
+        "history_empty": "暂无历史记录",
     },
     "en": {
         "title": "Video Text\nExtractor",
@@ -189,6 +217,7 @@ STRINGS = {
         "page_caption": "Batch videos, choose languages, export text or subtitles.",
         "open_folder": "Open output folder",
         "settings": "Settings",
+        "mode": "Mode",
         "video_format": "Video format",
         "language": "Language",
         "custom_code": "Custom code",
@@ -198,6 +227,7 @@ STRINGS = {
         "task": "Task",
         "transcribe": "Transcribe",
         "translate_en": "Translate to English",
+        "parallel": "Parallel",
         "queue": "Queue",
         "remove": "Remove",
         "clear": "Clear",
@@ -211,10 +241,20 @@ STRINGS = {
         "log": "Log",
         "start": "Start",
         "cancel": "Cancel",
+        "burn_sub": "Burn subtitles",
+        "history": "History",
+        "history_load": "Load",
+        "history_clear": "Clear history",
         "queue_empty": "Queue empty",
         "queue_empty_msg": "Add at least one video first.",
         "missing_file": "Missing file",
         "missing_file_msg": "Cannot find:\n{}",
+        "burn_title": "Burn subtitles into video",
+        "burn_need_srt": "Select a task with SRT output first.",
+        "burn_ffmpeg_missing": "ffmpeg is required to burn subtitles.",
+        "burn_done": "Subtitles burned:\n{}",
+        "burn_input_title": "Select video file",
+        "burn_srt_title": "Select SRT subtitle file",
         "lang_toggle": "中",
         "ready_status": "Ready",
         "running_status": "Running",
@@ -225,6 +265,8 @@ STRINGS = {
         "saved": "Saved: {}",
         "failed_code": "Failed with exit code {}",
         "output_will_be": "Output will be saved to:\n{}",
+        "suggest_model": "Suggested: {}",
+        "history_empty": "No history yet",
     },
 }
 
@@ -234,6 +276,7 @@ class Job:
     video: Path
     output: Path
     status: str = "Waiting"
+    mode: str = "whisper"
 
 
 def safe_part(value: str) -> str:
@@ -248,18 +291,47 @@ def file_size(path: Path) -> str:
     return f"{size / 1024 / 1024:.1f} MB"
 
 
+def get_video_duration(path: Path) -> float:
+    try:
+        from video_text_extractor import detect_tools
+        status = detect_tools()
+        ffprobe = status.ffprobe
+        if not ffprobe:
+            return 0.0
+        result = subprocess.run(
+            [ffprobe, "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def suggest_model(duration_sec: float) -> str:
+    if duration_sec <= 0:
+        return "base"
+    if duration_sec < 120:
+        return "small"
+    if duration_sec < 600:
+        return "base"
+    return "tiny"
+
+
 class VideoTextWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Video Text Extractor")
         self.resize(1220, 780)
         self.setMinimumSize(1060, 700)
+        self.setAcceptDrops(True)
 
         self.jobs: list[Job] = []
-        self.active_index: int | None = None
-        self.process: QProcess | None = None
+        self.active_processes: dict[int, QProcess] = {}
+        self.max_parallel = 1
         self.language_to_code: dict[str, str] = {}
         self.ui_lang = "zh"
+        self.history: list[dict] = self._load_history()
 
         self._build_actions()
         self._build_ui()
@@ -377,6 +449,7 @@ class VideoTextWindow(QMainWindow):
         splitter.addWidget(right_panel)
 
         self._build_preview(right_layout)
+        self._build_history(right_layout)
         splitter.setSizes([520, 620])
 
         footer = QFrame()
@@ -398,8 +471,13 @@ class VideoTextWindow(QMainWindow):
 
         self.cancel_button = QPushButton()
         self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.cancel_current)
+        self.cancel_button.clicked.connect(self.cancel_all)
         footer_layout.addWidget(self.cancel_button)
+
+        self.burn_button = QPushButton()
+        self.burn_button.setObjectName("burnButton")
+        self.burn_button.clicked.connect(self.burn_subtitles)
+        footer_layout.addWidget(self.burn_button)
 
     def _build_settings(self, layout: QVBoxLayout) -> None:
         self.settings_group = QGroupBox()
@@ -409,11 +487,19 @@ class VideoTextWindow(QMainWindow):
         settings_layout.setVerticalSpacing(12)
         layout.addWidget(self.settings_group)
 
+        self.mode_label = QLabel()
+        self.mode_combo = QComboBox()
+        for key, display in MODES:
+            self.mode_combo.addItem(display, key)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        settings_layout.addWidget(self.mode_label, 0, 0)
+        settings_layout.addWidget(self.mode_combo, 0, 1)
+
         self.format_label = QLabel()
         self.format_combo = QComboBox()
         self.format_combo.addItems(VIDEO_FILTERS.keys())
-        settings_layout.addWidget(self.format_label, 0, 0)
-        settings_layout.addWidget(self.format_combo, 0, 1)
+        settings_layout.addWidget(self.format_label, 1, 0)
+        settings_layout.addWidget(self.format_combo, 1, 1)
 
         self.language_label = QLabel()
         self.language_combo = QComboBox()
@@ -425,29 +511,35 @@ class VideoTextWindow(QMainWindow):
                 self.language_combo.setCurrentText(label)
         self.language_combo.currentTextChanged.connect(self._toggle_custom_language)
         self.language_combo.currentTextChanged.connect(self.refresh_outputs)
-        settings_layout.addWidget(self.language_label, 1, 0)
-        settings_layout.addWidget(self.language_combo, 1, 1)
+        settings_layout.addWidget(self.language_label, 2, 0)
+        settings_layout.addWidget(self.language_combo, 2, 1)
 
         self.custom_label = QLabel()
         self.custom_language = QLineEdit()
         self.custom_language.setPlaceholderText("e.g. en, zh, es")
         self.custom_language.textChanged.connect(self.refresh_outputs)
-        settings_layout.addWidget(self.custom_label, 2, 0)
-        settings_layout.addWidget(self.custom_language, 2, 1)
+        settings_layout.addWidget(self.custom_label, 3, 0)
+        settings_layout.addWidget(self.custom_language, 3, 1)
 
         self.model_label = QLabel()
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
         self.model_combo = QComboBox()
         self.model_combo.addItems(["tiny", "base", "small", "medium"])
         self.model_combo.setCurrentText("base")
-        settings_layout.addWidget(self.model_label, 3, 0)
-        settings_layout.addWidget(self.model_combo, 3, 1)
+        model_row.addWidget(self.model_combo, 1)
+        self.model_hint = QLabel()
+        self.model_hint.setObjectName("modelHint")
+        model_row.addWidget(self.model_hint)
+        settings_layout.addWidget(self.model_label, 4, 0)
+        settings_layout.addLayout(model_row, 4, 1)
 
         self.output_label = QLabel()
         self.output_combo = QComboBox()
         self.output_combo.addItems(OUTPUT_FORMATS.keys())
         self.output_combo.currentTextChanged.connect(self.refresh_outputs)
-        settings_layout.addWidget(self.output_label, 4, 0)
-        settings_layout.addWidget(self.output_combo, 4, 1)
+        settings_layout.addWidget(self.output_label, 5, 0)
+        settings_layout.addWidget(self.output_combo, 5, 1)
 
         self.folder_label = QLabel()
         self.output_dir = QLineEdit(str(APP_DIR / "outputs"))
@@ -459,8 +551,8 @@ class VideoTextWindow(QMainWindow):
         output_row.setContentsMargins(0, 0, 0, 0)
         output_row.addWidget(self.output_dir, 1)
         output_row.addWidget(browse_output)
-        settings_layout.addWidget(self.folder_label, 5, 0)
-        settings_layout.addLayout(output_row, 5, 1)
+        settings_layout.addWidget(self.folder_label, 6, 0)
+        settings_layout.addLayout(output_row, 6, 1)
 
         self.task_label = QLabel()
         task_box = QHBoxLayout()
@@ -473,10 +565,19 @@ class VideoTextWindow(QMainWindow):
         self.task_group.addButton(self.translate_radio)
         task_box.addWidget(self.transcribe_radio)
         task_box.addWidget(self.translate_radio)
-        settings_layout.addWidget(self.task_label, 6, 0)
-        settings_layout.addLayout(task_box, 6, 1)
+        settings_layout.addWidget(self.task_label, 7, 0)
+        settings_layout.addLayout(task_box, 7, 1)
+
+        self.parallel_label = QLabel()
+        self.parallel_spin = QSpinBox()
+        self.parallel_spin.setRange(1, 4)
+        self.parallel_spin.setValue(1)
+        self.parallel_spin.valueChanged.connect(self._on_parallel_changed)
+        settings_layout.addWidget(self.parallel_label, 8, 0)
+        settings_layout.addWidget(self.parallel_spin, 8, 1)
 
         self._toggle_custom_language()
+        self._on_mode_changed()
 
     def _build_queue(self, layout: QVBoxLayout) -> None:
         queue_header = QHBoxLayout()
@@ -529,6 +630,26 @@ class VideoTextWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setFixedHeight(172)
         layout.addWidget(self.log)
+
+    def _build_history(self, layout: QVBoxLayout) -> None:
+        hist_header = QHBoxLayout()
+        self.history_label = QLabel()
+        self.history_label.setObjectName("sectionTitle")
+        hist_header.addWidget(self.history_label)
+        hist_header.addStretch(1)
+        self.history_load_btn = QPushButton()
+        self.history_load_btn.clicked.connect(self._load_selected_history)
+        hist_header.addWidget(self.history_load_btn)
+        self.history_clear_btn = QPushButton()
+        self.history_clear_btn.clicked.connect(self._clear_history)
+        hist_header.addWidget(self.history_clear_btn)
+        layout.addLayout(hist_header)
+
+        self.history_list = QListWidget()
+        self.history_list.setFixedHeight(120)
+        self.history_list.itemDoubleClicked.connect(self._load_selected_history)
+        layout.addWidget(self.history_list)
+        self._refresh_history_list()
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
@@ -606,6 +727,11 @@ class VideoTextWindow(QMainWindow):
                 font-weight: 800;
                 color: #0d1117;
             }
+            #modelHint {
+                color: #656d76;
+                font-size: 11px;
+                font-style: italic;
+            }
             QGroupBox {
                 border: 1px solid #d0d7de;
                 border-radius: 12px;
@@ -619,14 +745,14 @@ class VideoTextWindow(QMainWindow):
                 padding: 0 6px;
                 color: #24292f;
             }
-            QLineEdit, QComboBox, QPlainTextEdit {
+            QLineEdit, QComboBox, QPlainTextEdit, QSpinBox {
                 background: #ffffff;
                 border: 1px solid #d0d7de;
                 border-radius: 8px;
                 padding: 8px;
                 selection-background-color: #b6d4fe;
             }
-            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {
+            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QSpinBox:focus {
                 border-color: #58a6ff;
                 outline: none;
             }
@@ -664,18 +790,18 @@ class VideoTextWindow(QMainWindow):
                 padding: 8px;
                 font-weight: 700;
             }
-            QListWidget#runtimeList {
+            QListWidget#runtimeList, QListWidget {
                 background: #161b22;
                 color: #e6edf3;
                 border: 1px solid #30363d;
                 border-radius: 12px;
                 padding: 6px;
             }
-            QListWidget#runtimeList::item {
+            QListWidget#runtimeList::item, QListWidget::item {
                 padding: 3px 6px;
                 border-radius: 4px;
             }
-            QListWidget#runtimeList::item:hover {
+            QListWidget#runtimeList::item:hover, QListWidget::item:hover {
                 background: #21262d;
             }
             QPushButton {
@@ -714,6 +840,16 @@ class VideoTextWindow(QMainWindow):
             QPushButton#primaryButton:disabled {
                 background: #94b8e8;
                 border-color: #8aacdb;
+            }
+            QPushButton#burnButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #da3633, stop:1 #b62324);
+                color: white;
+                border: 1px solid #a11d1e;
+            }
+            QPushButton#burnButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #f47067, stop:1 #da3633);
             }
             QProgressBar {
                 border: 1px solid #d0d7de;
@@ -757,6 +893,7 @@ class VideoTextWindow(QMainWindow):
         self.caption_label.setText(s["page_caption"])
         self.open_folder_button.setText(f"\U0001f4c2 {s['open_folder']}")
         self.settings_group.setTitle(s["settings"])
+        self.mode_label.setText(s["mode"])
         self.format_label.setText(s["video_format"])
         self.language_label.setText(s["language"])
         self.custom_label.setText(s["custom_code"])
@@ -766,6 +903,7 @@ class VideoTextWindow(QMainWindow):
         self.task_label.setText(s["task"])
         self.transcribe_radio.setText(s["transcribe"])
         self.translate_radio.setText(s["translate_en"])
+        self.parallel_label.setText(s["parallel"])
         self.queue_label.setText(s["queue"])
         self.remove_button.setText(s["remove"])
         self.clear_button.setText(s["clear"])
@@ -778,6 +916,10 @@ class VideoTextWindow(QMainWindow):
         self.log_title.setText(s["log"])
         self.start_button.setText(f"▶ {s['start']}")
         self.cancel_button.setText(s["cancel"])
+        self.burn_button.setText(f"\U0001f525 {s['burn_sub']}")
+        self.history_label.setText(s["history"])
+        self.history_load_btn.setText(s["history_load"])
+        self.history_clear_btn.setText(s["history_clear"])
         self._refresh_runtime()
 
     def _refresh_runtime(self) -> None:
@@ -800,6 +942,60 @@ class VideoTextWindow(QMainWindow):
                 item.setForeground(QColor("#f0883e"))
             self.runtime_list.addItem(item)
 
+    def _on_mode_changed(self) -> None:
+        mode = self.mode_combo.currentData()
+        is_whisper = mode == "whisper"
+        is_audio = mode == "audio"
+        is_subtitle = mode == "subtitle"
+        self.model_label.setVisible(is_whisper)
+        self.model_combo.setVisible(is_whisper)
+        self.model_hint.setVisible(is_whisper)
+        self.task_label.setVisible(is_whisper)
+        self.transcribe_radio.setVisible(is_whisper)
+        self.translate_radio.setVisible(is_whisper)
+        self.language_label.setVisible(mode not in {"subtitle", "ocr"})
+        self.language_combo.setVisible(mode not in {"subtitle", "ocr"})
+        self._toggle_custom_language()
+        self.output_label.setVisible(not is_subtitle)
+        self.output_combo.setVisible(not is_subtitle)
+        self.parallel_label.setVisible(is_whisper)
+        self.parallel_spin.setVisible(is_whisper)
+
+    def _on_parallel_changed(self, value: int) -> None:
+        self.max_parallel = value
+
+    def _toggle_custom_language(self) -> None:
+        mode = self.mode_combo.currentData()
+        is_custom = self.language_to_code.get(self.language_combo.currentText()) == "custom"
+        visible = is_custom and mode not in {"subtitle", "ocr"}
+        self.custom_label.setVisible(visible)
+        self.custom_language.setVisible(visible)
+
+    def _update_model_hint(self, video_path: Path) -> None:
+        duration = get_video_duration(video_path)
+        suggested = suggest_model(duration)
+        s = STRINGS[self.ui_lang]
+        if duration > 0:
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            self.model_hint.setText(f"{mins}:{secs:02d} → {s['suggest_model'].format(suggested)}")
+        else:
+            self.model_hint.setText(s["suggest_model"].format(suggested))
+
+    # --- Drag and drop ---
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        for url in event.mimeData().urls():
+            path = Path(url.toLocalFile())
+            if path.suffix.lower() in VIDEO_EXTS:
+                self.add_video_path(path)
+
+    # --- Core operations ---
+
     def add_videos(self) -> None:
         selected = self.format_combo.currentText()
         pattern = VIDEO_FILTERS[selected]
@@ -816,8 +1012,10 @@ class VideoTextWindow(QMainWindow):
             return
         if any(job.video == path for job in self.jobs):
             return
-        self.jobs.append(Job(video=path, output=self.output_path_for(path)))
+        mode = self.mode_combo.currentData()
+        self.jobs.append(Job(video=path, output=self.output_path_for(path), mode=mode))
         self.refresh_table()
+        self._update_model_hint(path)
 
     def remove_selected(self) -> None:
         rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
@@ -827,7 +1025,7 @@ class VideoTextWindow(QMainWindow):
         self.refresh_table()
 
     def clear_queue(self) -> None:
-        if self.process and self.process.state() != QProcess.NotRunning:
+        if self.active_processes:
             return
         self.jobs.clear()
         self.refresh_table()
@@ -854,10 +1052,6 @@ class VideoTextWindow(QMainWindow):
             return self.custom_language.text().strip() or None
         return code or None
 
-    def _toggle_custom_language(self) -> None:
-        is_custom = self.language_to_code.get(self.language_combo.currentText()) == "custom"
-        self.custom_language.setVisible(is_custom)
-
     def refresh_table(self) -> None:
         self.table.setRowCount(len(self.jobs))
         for row, job in enumerate(self.jobs):
@@ -880,27 +1074,33 @@ class VideoTextWindow(QMainWindow):
             self.preview.setPlainText(s["output_will_be"].format(job.output))
 
     def command_for(self, job: Job) -> list[str]:
+        mode = job.mode
         fmt, _suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
         command = [
-            sys.executable,
-            "-u",
-            str(EXTRACTOR),
+            sys.executable, "-u", str(EXTRACTOR),
             str(job.video),
-            "--mode",
-            "whisper",
-            "--whisper-model",
-            self.model_combo.currentText(),
-            "--format",
-            fmt,
-            "-o",
-            str(job.output),
+            "--mode", mode,
+            "--format", fmt,
+            "-o", str(job.output),
         ]
-        language = self.language_code()
-        if language:
-            command.extend(["--language", language])
-        if self.translate_radio.isChecked():
-            command.extend(["--whisper-task", "translate"])
+        if mode == "whisper":
+            command.extend(["--whisper-model", self.model_combo.currentText()])
+            language = self.language_code()
+            if language:
+                command.extend(["--language", language])
+            if self.translate_radio.isChecked():
+                command.extend(["--whisper-task", "translate"])
+        elif mode == "audio":
+            language = self.language_code()
+            if language:
+                command.extend(["--language", language])
+        elif mode == "ocr":
+            language = self.language_code()
+            if language:
+                command.extend(["--language", language])
         return command
+
+    # --- Parallel job execution ---
 
     def start_jobs(self) -> None:
         s = STRINGS[self.ui_lang]
@@ -910,7 +1110,6 @@ class VideoTextWindow(QMainWindow):
         Path(self.output_dir.text()).mkdir(parents=True, exist_ok=True)
         for job in self.jobs:
             job.status = "Waiting"
-        self.active_index = None
         self.log.clear()
         self.preview.clear()
         self.progress.setRange(0, 0)
@@ -918,47 +1117,64 @@ class VideoTextWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.refresh_table()
-        self.start_next_job()
+        self._save_history_entry()
+        self._fill_parallel_slots()
 
-    def start_next_job(self) -> None:
-        next_index = None
-        for index, job in enumerate(self.jobs):
-            if job.status == "Waiting":
-                next_index = index
+    def _fill_parallel_slots(self) -> None:
+        while len(self.active_processes) < self.max_parallel:
+            idx = self._next_waiting_index()
+            if idx is None:
                 break
-        if next_index is None:
-            self.finish_batch()
-            return
+            self._start_job(idx)
 
-        self.active_index = next_index
-        job = self.jobs[next_index]
+    def _next_waiting_index(self) -> int | None:
+        for i, job in enumerate(self.jobs):
+            if job.status == "Waiting":
+                return i
+        return None
+
+    def _start_job(self, index: int) -> None:
+        job = self.jobs[index]
         job.status = "Running"
         self.refresh_table()
-        self.table.selectRow(next_index)
+        self.table.selectRow(index)
         s = STRINGS[self.ui_lang]
         self.append_log(f"\n{s['starting'].format(job.video.name)}\n")
 
-        self.process = QProcess(self)
-        self.process.setWorkingDirectory(str(APP_DIR))
-        self.process.setProcessChannelMode(QProcess.MergedChannels)
-        env = self.process.processEnvironment()
+        process = QProcess(self)
+        process.setWorkingDirectory(str(APP_DIR))
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        env = process.processEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
-        self.process.setProcessEnvironment(env)
-        self.process.readyReadStandardOutput.connect(self.read_process_output)
-        self.process.finished.connect(self.process_finished)
+        process.setProcessEnvironment(env)
+
+        process.setProperty("job_index", index)
+        process.readyReadStandardOutput.connect(lambda p=process: self._read_output(p))
+        process.finished.connect(lambda code, status, p=process: self._job_finished(p, code))
+
         command = self.command_for(job)
-        self.process.start(command[0], command[1:])
+        process.start(command[0], command[1:])
+        self.active_processes[index] = process
 
-    def read_process_output(self) -> None:
-        if not self.process:
-            return
-        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+    def _read_output(self, process: QProcess) -> None:
+        text = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
         self.append_log(text)
+        self._parse_progress(text)
 
-    def process_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
-        if self.active_index is None:
+    def _parse_progress(self, text: str) -> None:
+        match = re.search(r"(\d+)%\|.*?(\d+)/(\d+)", text)
+        if match:
+            pct = int(match.group(1))
+            self.progress.setRange(0, 100)
+            self.progress.setValue(pct)
+
+    def _job_finished(self, process: QProcess, exit_code: int) -> None:
+        index = process.property("job_index")
+        if index is None or index not in self.active_processes:
             return
-        job = self.jobs[self.active_index]
+        del self.active_processes[index]
+
+        job = self.jobs[index]
         s = STRINGS[self.ui_lang]
         if exit_code == 0:
             job.status = s["done_status"]
@@ -969,7 +1185,11 @@ class VideoTextWindow(QMainWindow):
             job.status = s["failed_status"]
             self.append_log(f"{s['failed_code'].format(exit_code)}\n")
         self.refresh_table()
-        QTimer.singleShot(120, self.start_next_job)
+
+        if self.active_processes:
+            self._fill_parallel_slots()
+        else:
+            self.finish_batch()
 
     def finish_batch(self) -> None:
         s = STRINGS[self.ui_lang]
@@ -978,11 +1198,12 @@ class VideoTextWindow(QMainWindow):
         self.status_badge.setText(s["done_status"])
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
-        self.process = None
 
-    def cancel_current(self) -> None:
-        if self.process and self.process.state() != QProcess.NotRunning:
-            self.process.kill()
+    def cancel_all(self) -> None:
+        for process in self.active_processes.values():
+            if process.state() != QProcess.NotRunning:
+                process.kill()
+        self.active_processes.clear()
         s = STRINGS[self.ui_lang]
         for job in self.jobs:
             if job.status in {"Waiting", "Running"}:
@@ -990,6 +1211,8 @@ class VideoTextWindow(QMainWindow):
         self.refresh_table()
         self.finish_batch()
         self.status_badge.setText(s["cancelled_status"])
+
+    # --- Progress & log ---
 
     def append_log(self, text: str) -> None:
         self.log.moveCursor(self.log.textCursor().MoveOperation.End)
@@ -1003,6 +1226,106 @@ class VideoTextWindow(QMainWindow):
         path = Path(self.output_dir.text().strip() or APP_DIR)
         path.mkdir(parents=True, exist_ok=True)
         os.startfile(path)
+
+    # --- Burn subtitles ---
+
+    def burn_subtitles(self) -> None:
+        from video_text_extractor import detect_tools
+        s = STRINGS[self.ui_lang]
+        status = detect_tools()
+        if not status.ffmpeg:
+            QMessageBox.warning(self, s["burn_title"], s["burn_ffmpeg_missing"])
+            return
+
+        video_path, _ = QFileDialog.getOpenFileName(
+            self, s["burn_input_title"], str(APP_DIR),
+            "Video files (*.mp4 *.mov *.mkv *.webm *.m4v *.avi);;All files (*.*)")
+        if not video_path:
+            return
+
+        srt_path, _ = QFileDialog.getOpenFileName(
+            self, s["burn_srt_title"], str(Path(video_path).parent),
+            "SRT files (*.srt);;All files (*.*)")
+        if not srt_path:
+            return
+
+        video_p = Path(video_path)
+        output_path = video_p.parent / f"{video_p.stem}_subtitled.mp4"
+
+        cmd = [
+            status.ffmpeg, "-y",
+            "-i", video_path,
+            "-vf", f"subtitles={srt_path}",
+            "-c:a", "copy",
+            str(output_path),
+        ]
+        self.append_log(f"\nBurning subtitles: {video_p.name}\n")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                self.append_log(f"{s['burn_done'].format(output_path)}\n")
+                QMessageBox.information(self, s["burn_title"], s["burn_done"].format(output_path))
+            else:
+                self.append_log(f"ffmpeg error: {result.stderr[-500:]}\n")
+        except Exception as e:
+            self.append_log(f"Error: {e}\n")
+
+    # --- History ---
+
+    def _load_history(self) -> list[dict]:
+        if HISTORY_FILE.exists():
+            try:
+                return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return []
+
+    def _save_history_entry(self) -> None:
+        entry = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "files": [str(j.video) for j in self.jobs],
+            "mode": self.mode_combo.currentData(),
+            "model": self.model_combo.currentText(),
+            "language": self.language_code() or "auto",
+            "format": self.output_combo.currentText(),
+            "translate": self.translate_radio.isChecked(),
+        }
+        self.history.insert(0, entry)
+        self.history = self.history[:50]
+        try:
+            HISTORY_FILE.write_text(json.dumps(self.history, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        self._refresh_history_list()
+
+    def _refresh_history_list(self) -> None:
+        self.history_list.clear()
+        if not self.history:
+            s = STRINGS[self.ui_lang]
+            self.history_list.addItem(s["history_empty"])
+            return
+        for entry in self.history[:20]:
+            files = ", ".join(Path(f).name for f in entry.get("files", [])[:3])
+            mode = entry.get("mode", "whisper")
+            time_str = entry.get("time", "")
+            self.history_list.addItem(f"[{time_str}] {mode} | {files}")
+
+    def _load_selected_history(self) -> None:
+        row = self.history_list.currentRow()
+        if row < 0 or row >= len(self.history):
+            return
+        entry = self.history[row]
+        for file_str in entry.get("files", []):
+            p = Path(file_str)
+            if p.exists() and not any(j.video == p for j in self.jobs):
+                self.jobs.append(Job(video=p, output=self.output_path_for(p), mode=entry.get("mode", "whisper")))
+        self.refresh_table()
+
+    def _clear_history(self) -> None:
+        self.history.clear()
+        if HISTORY_FILE.exists():
+            HISTORY_FILE.unlink()
+        self._refresh_history_list()
 
 
 def main() -> int:
