@@ -160,7 +160,7 @@ STRINGS = {
         "task": "任务",
         "transcribe": "转写",
         "translate_en": "翻译成英文",
-        "parallel_jobs": "并行数",
+        "parallel": "并行数",
         "queue": "队列",
         "remove": "移除",
         "clear": "清空",
