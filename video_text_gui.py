@@ -202,7 +202,6 @@ STRINGS = {
         "history_empty": "暂无历史记录",
         "gpu": "CUDA GPU",
         "save_preview": "保存预览",
-        "copy_as": "复制为",
     },
     "en": {
         "title": "Video Text\nExtractor",
@@ -272,7 +271,6 @@ STRINGS = {
         "history_empty": "No history yet",
         "gpu": "CUDA GPU",
         "save_preview": "Save preview",
-        "copy_as": "Copy as",
     },
 }
 
@@ -708,11 +706,6 @@ class VideoTextWindow(QMainWindow):
         self.copy_button = QPushButton()
         self.copy_button.clicked.connect(self.copy_preview)
         title_row.addWidget(self.copy_button)
-        self.copy_as_combo = QComboBox()
-        self.copy_as_combo.addItems(["TXT", "SRT", "VTT", "JSON"])
-        self.copy_as_combo.setFixedWidth(70)
-        self.copy_as_combo.currentTextChanged.connect(self._on_copy_format_changed)
-        title_row.addWidget(self.copy_as_combo)
         layout.addLayout(title_row)
 
         self.preview = QPlainTextEdit()
@@ -1300,19 +1293,6 @@ class VideoTextWindow(QMainWindow):
 
     def copy_preview(self) -> None:
         QApplication.clipboard().setText(self.preview.toPlainText())
-
-    def _on_copy_format_changed(self, fmt_name: str) -> None:
-        rows = sorted({index.row() for index in self.table.selectedIndexes()})
-        if not rows:
-            return
-        job = self.jobs[rows[0]]
-        if not job.output.exists():
-            return
-        text = job.output.read_text(encoding="utf-8", errors="replace")
-        if fmt_name == "TXT":
-            QApplication.clipboard().setText(text)
-            return
-        QApplication.clipboard().setText(text)
 
     def _save_preview(self) -> None:
         rows = sorted({index.row() for index in self.table.selectedIndexes()})
