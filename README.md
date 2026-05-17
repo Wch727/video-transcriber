@@ -13,8 +13,12 @@ A local video-to-text tool with a desktop GUI and CLI. Uses OpenAI Whisper local
 
 ## Features / 功能
 
-- **Desktop GUI** — Drag-and-drop video files, choose language/model/format, batch process with one click.
-- **桌面 GUI** — 拖拽添加视频，选择语言/模型/格式，一键批量处理。
+- **Desktop GUI** — Add video files, choose language/model/format, batch process with one click.
+- **桌面 GUI** — 添加视频，选择语言/模型/格式，一键批量处理。
+- **Auto Language Detection** — Whisper automatically detects the spoken language.
+- **自动识别语言** — Whisper 自动检测视频中的语音语言。
+- **Translate to English** — Translate any language speech into English text.
+- **翻译成英文** — 将任意语言的语音翻译成英文文本。
 - **55+ Languages** — English, Chinese, Japanese, Korean, Spanish, French, German, Arabic, Hindi, Thai, and many more.
 - **55+ 种语言** — 英语、中文、日语、韩语、西班牙语、法语、德语、阿拉伯语、印地语、泰语等。
 - **Multiple Output Formats** — TXT, SRT (subtitles), VTT (web subtitles), JSON (full metadata).
@@ -51,6 +55,30 @@ Double-click `start_video_text_gui.bat` or run:
 ```powershell
 python video_text_gui.py
 ```
+
+### GUI 使用说明 / GUI Guide
+
+**界面布局：**
+- **左侧边栏** — 状态检测、添加视频按钮、语言切换
+- **右侧主区域** — 设置面板、队列列表、预览窗口、日志
+
+**基本操作步骤：**
+
+1. **添加视频** — 点击侧边栏 "添加视频" 按钮，选择视频文件
+2. **选择语言** — 在设置面板的 "语言" 下拉框中选择：
+   - `Auto detect` — 自动识别语音语言（推荐）
+   - 具体语言如 `English (en)`、`Chinese (zh)` 等
+   - `Custom code` — 输入任意 Whisper 支持的语言代码
+3. **选择模型** — `tiny` 最快，`base` 均衡，`small`/`medium` 更准但更慢
+4. **选择输出格式** — TXT、SRT、VTT、JSON
+5. **选择任务** — "转写"（原语言）或 "翻译成英文"
+6. **点击 "开始"** — 队列中的视频会依次处理
+
+**其他功能：**
+- 切换界面语言：点击侧边栏的 🌐 按钮切换中文/英文
+- 预览结果：转写完成后右侧预览区自动显示内容
+- 复制结果：点击 "复制预览" 按钮
+- 打开输出目录：点击右上角 "打开输出目录" 按钮
 
 ---
 
