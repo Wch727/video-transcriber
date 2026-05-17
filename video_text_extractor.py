@@ -40,10 +40,19 @@ class ToolStatus:
     openai_key: bool
     local_whisper: bool
     imageio_ffmpeg: bool
+    cuda_gpu: bool
 
 
 def which(name: str) -> str | None:
     return shutil.which(name)
+
+
+def _detect_cuda() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
 
 
 def detect_tools() -> ToolStatus:
@@ -54,6 +63,7 @@ def detect_tools() -> ToolStatus:
         openai_key=bool(os.getenv("OPENAI_API_KEY")),
         local_whisper=module_available("whisper"),
         imageio_ffmpeg=module_available("imageio_ffmpeg"),
+        cuda_gpu=_detect_cuda(),
     )
 
 
@@ -358,11 +368,18 @@ def transcribe_with_local_whisper(
     print("第一次运行会下载模型；下载完成后可离线复用。")
     try:
         model = whisper.load_model(model_name)
+        try:
+            import torch
+            use_fp16 = torch.cuda.is_available()
+            if use_fp16:
+                print("检测到 CUDA GPU，启用 fp16 加速。")
+        except ImportError:
+            use_fp16 = False
         result = model.transcribe(
             str(video),
             language=language,
             task=task,
-            fp16=False,
+            fp16=use_fp16,
             verbose=verbose,
         )
     finally:

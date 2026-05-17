@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QFont
+from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -200,6 +200,9 @@ STRINGS = {
         "output_will_be": "输出将保存到：\n{}",
         "suggest_model": "推荐模型: {}",
         "history_empty": "暂无历史记录",
+        "gpu": "CUDA GPU",
+        "save_preview": "保存预览",
+        "copy_as": "复制为",
     },
     "en": {
         "title": "Video Text\nExtractor",
@@ -267,6 +270,9 @@ STRINGS = {
         "output_will_be": "Output will be saved to:\n{}",
         "suggest_model": "Suggested: {}",
         "history_empty": "No history yet",
+        "gpu": "CUDA GPU",
+        "save_preview": "Save preview",
+        "copy_as": "Copy as",
     },
 }
 
@@ -289,6 +295,35 @@ def file_size(path: Path) -> str:
     if size >= 1024 * 1024 * 1024:
         return f"{size / 1024 / 1024 / 1024:.2f} GB"
     return f"{size / 1024 / 1024:.1f} MB"
+
+
+THUMB_CACHE: dict[Path, QPixmap] = {}
+
+
+def get_video_thumbnail(path: Path) -> QPixmap | None:
+    if path in THUMB_CACHE:
+        return THUMB_CACHE[path]
+    try:
+        from video_text_extractor import detect_tools
+        status = detect_tools()
+        ffmpeg = status.ffmpeg or (status.imageio_ffmpeg and str(Path(__import__("imageio_ffmpeg").get_ffmpeg_exe())))
+        if not ffmpeg:
+            return None
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(path), "-vframes", "1", "-vf", "scale=80:-1", tmp_path],
+            capture_output=True, timeout=10,
+        )
+        pixmap = QPixmap(tmp_path)
+        os.unlink(tmp_path)
+        if not pixmap.isNull():
+            THUMB_CACHE[path] = pixmap
+            return pixmap
+    except Exception:
+        pass
+    return None
 
 
 def get_video_duration(path: Path) -> float:
@@ -388,7 +423,7 @@ class VideoTextWindow(QMainWindow):
 
         self.runtime_list = QListWidget()
         self.runtime_list.setObjectName("runtimeList")
-        self.runtime_list.setFixedHeight(128)
+        self.runtime_list.setFixedHeight(160)
         side_layout.addWidget(self.runtime_list)
 
         side_layout.addSpacing(4)
@@ -578,7 +613,7 @@ class VideoTextWindow(QMainWindow):
         model_row = QHBoxLayout()
         model_row.setSpacing(8)
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["tiny", "base", "small", "medium"])
+        self.model_combo.addItems(["tiny", "base", "small", "medium", "large-v3", "turbo"])
         self.model_combo.setCurrentText("base")
         model_row.addWidget(self.model_combo, 1)
         self.model_hint = QLabel()
@@ -648,11 +683,13 @@ class VideoTextWindow(QMainWindow):
         queue_header.addWidget(self.clear_button)
         layout.addLayout(queue_header)
 
-        self.table = QTableWidget(0, 4)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table = QTableWidget(0, 5)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -665,13 +702,21 @@ class VideoTextWindow(QMainWindow):
         self.preview_title.setObjectName("sectionTitle")
         title_row.addWidget(self.preview_title)
         title_row.addStretch(1)
+        self.save_preview_btn = QPushButton()
+        self.save_preview_btn.clicked.connect(self._save_preview)
+        title_row.addWidget(self.save_preview_btn)
         self.copy_button = QPushButton()
         self.copy_button.clicked.connect(self.copy_preview)
         title_row.addWidget(self.copy_button)
+        self.copy_as_combo = QComboBox()
+        self.copy_as_combo.addItems(["TXT", "SRT", "VTT", "JSON"])
+        self.copy_as_combo.setFixedWidth(70)
+        self.copy_as_combo.currentTextChanged.connect(self._on_copy_format_changed)
+        title_row.addWidget(self.copy_as_combo)
         layout.addLayout(title_row)
 
         self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
+        self.preview.setReadOnly(False)
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.preview, 1)
 
@@ -932,10 +977,11 @@ class VideoTextWindow(QMainWindow):
         self.remove_button.setText(s["remove"])
         self.clear_button.setText(s["clear"])
         self.table.setHorizontalHeaderLabels([
-            s["col_video"], s["col_size"], s["col_output"], s["col_status"]
+            "", s["col_video"], s["col_size"], s["col_output"], s["col_status"]
         ])
         self.preview_title.setText(s["preview"])
         self.copy_button.setText(f"\U0001f4cb {s['copy_preview']}")
+        self.save_preview_btn.setText(f"\U0001f4be {s['save_preview']}")
         self.preview.setPlaceholderText(s["preview_placeholder"])
         self.log_title.setText(s["log"])
         self.start_button.setText(f"▶ {s['start']}")
@@ -955,6 +1001,7 @@ class VideoTextWindow(QMainWindow):
             (f"⚙ {s['local_whisper']}", status.local_whisper),
             (f"\U0001f3a5 ffmpeg", bool(status.ffmpeg or status.imageio_ffmpeg)),
             (f"\U0001f511 {s['openai_key']}", status.openai_key),
+            (f"\U0001f7e2 {s['gpu']}", status.cuda_gpu),
         ]
         self.runtime_list.clear()
         for label, ok in rows:
@@ -1079,12 +1126,20 @@ class VideoTextWindow(QMainWindow):
     def refresh_table(self) -> None:
         self.table.setRowCount(len(self.jobs))
         for row, job in enumerate(self.jobs):
+            # Thumbnail column
+            thumb = get_video_thumbnail(job.video)
+            thumb_item = QTableWidgetItem()
+            if thumb:
+                thumb_item.setIcon(thumb.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 0, thumb_item)
+            # Data columns
             values = [job.video.name, file_size(job.video), str(job.output), job.status]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col in {1, 3}:
                     item.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(row, col, item)
+                self.table.setItem(row, col + 1, item)
 
     def preview_selected_output(self) -> None:
         rows = sorted({index.row() for index in self.table.selectedIndexes()})
@@ -1246,10 +1301,38 @@ class VideoTextWindow(QMainWindow):
     def copy_preview(self) -> None:
         QApplication.clipboard().setText(self.preview.toPlainText())
 
+    def _on_copy_format_changed(self, fmt_name: str) -> None:
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if not rows:
+            return
+        job = self.jobs[rows[0]]
+        if not job.output.exists():
+            return
+        text = job.output.read_text(encoding="utf-8", errors="replace")
+        if fmt_name == "TXT":
+            QApplication.clipboard().setText(text)
+            return
+        QApplication.clipboard().setText(text)
+
+    def _save_preview(self) -> None:
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if not rows:
+            return
+        job = self.jobs[rows[0]]
+        text = self.preview.toPlainText()
+        job.output.parent.mkdir(parents=True, exist_ok=True)
+        job.output.write_text(text, encoding="utf-8")
+        self.append_log(f"Preview saved: {job.output}\n")
+
     def open_output_folder(self) -> None:
         path = Path(self.output_dir.text().strip() or APP_DIR)
         path.mkdir(parents=True, exist_ok=True)
-        os.startfile(path)
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
 
     # --- Burn subtitles ---
 
