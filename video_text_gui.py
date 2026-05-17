@@ -264,7 +264,6 @@ class VideoTextWindow(QMainWindow):
         self._build_actions()
         self._build_ui()
         self._apply_style()
-        self._load_sample_files()
         self._refresh_runtime()
         self._retranslate()
 
@@ -324,14 +323,6 @@ class VideoTextWindow(QMainWindow):
         self.add_button.setObjectName("primaryButton")
         self.add_button.clicked.connect(self.add_videos)
         side_layout.addWidget(self.add_button)
-
-        self.sample_41_button = QPushButton("\U0001f3ac 4-1.mp4")
-        self.sample_41_button.clicked.connect(lambda: self.add_video_path(APP_DIR / "4-1.mp4"))
-        side_layout.addWidget(self.sample_41_button)
-
-        self.sample_42_button = QPushButton("\U0001f3ac 4-2.mp4")
-        self.sample_42_button.clicked.connect(lambda: self.add_video_path(APP_DIR / "4-2.mp4"))
-        side_layout.addWidget(self.sample_42_button)
 
         side_layout.addStretch(1)
 
@@ -808,12 +799,6 @@ class VideoTextWindow(QMainWindow):
             else:
                 item.setForeground(QColor("#f0883e"))
             self.runtime_list.addItem(item)
-
-    def _load_sample_files(self) -> None:
-        for name in ["4-2.mp4", "4-1.mp4"]:
-            path = APP_DIR / name
-            if path.exists():
-                self.add_video_path(path)
 
     def add_videos(self) -> None:
         selected = self.format_combo.currentText()
