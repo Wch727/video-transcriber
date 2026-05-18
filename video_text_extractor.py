@@ -579,7 +579,7 @@ def extract_subtitles_as(video: Path, out: Path, status: ToolStatus, output_form
 def api_response_to_text(response: Any, response_format: str) -> str:
     if isinstance(response, str):
         return response
-    if response_format == "json":
+    if response_format in {"json", "verbose_json"}:
         if hasattr(response, "model_dump_json"):
             return response.model_dump_json(indent=2)
         return json.dumps(response, ensure_ascii=False, indent=2)
@@ -621,6 +621,8 @@ def transcribe_one_file(
         kwargs["language"] = language
     if prompt:
         kwargs["prompt"] = prompt
+    if response_format == "verbose_json":
+        kwargs["timestamp_granularities"] = ["segment"]
 
     try:
         response = client.audio.transcriptions.create(**kwargs)
@@ -678,26 +680,39 @@ class _ChunkSegment:
     text: str
 
 
-def _parse_openai_json_segments(raw: str) -> list[_ChunkSegment]:
-    """Parse the JSON response from OpenAI transcriptions API into segments."""
+@dataclass
+class _ChunkTranscript:
+    """Parsed chunk transcription with optional timestamped segments."""
+
+    text: str
+    segments: list[_ChunkSegment]
+
+
+def _parse_openai_verbose_transcript(raw: str) -> _ChunkTranscript:
+    """Parse verbose OpenAI transcription JSON into text plus segments."""
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return []
+        return _ChunkTranscript(text=raw.strip(), segments=[])
+    if not isinstance(payload, dict):
+        return _ChunkTranscript(text=str(payload).strip(), segments=[])
 
+    transcript_text = (payload.get("text") or "").strip()
     segments: list[_ChunkSegment] = []
     for seg in payload.get("segments", []):
-        text = (seg.get("text") or "").strip()
-        if not text:
+        if not isinstance(seg, dict):
+            continue
+        segment_text = (seg.get("text") or "").strip()
+        if not segment_text:
             continue
         segments.append(
             _ChunkSegment(
                 start=float(seg.get("start", 0)),
                 end=float(seg.get("end", 0)),
-                text=text,
+                text=segment_text,
             )
         )
-    return segments
+    return _ChunkTranscript(text=transcript_text, segments=segments)
 
 
 def _merge_chunks_into_segments(
@@ -743,14 +758,15 @@ def transcribe_audio(
         write_text(out, text)
         return out
 
-    # For chunked transcription we always request JSON so we can preserve
+    # For chunked transcription we request verbose JSON so we can preserve
     # per-segment timestamps; the final output is reformatted afterwards.
     final_format = response_format
-    api_format = "json"
+    api_format = "verbose_json"
 
     with local_temp_dir(out.parent, "video_text_") as temp_dir:
         chunks = split_audio_with_ffmpeg(video, temp_dir, status, chunk_seconds)
         segments_per_chunk: list[list[_ChunkSegment]] = []
+        chunk_texts: list[str] = []
         for index, chunk in enumerate(chunks, start=1):
             print(f"转写切片 {index}/{len(chunks)}: {chunk.name}")
             raw = transcribe_one_file(
@@ -760,9 +776,14 @@ def transcribe_audio(
                 prompt=prompt,
                 response_format=api_format,
             )
-            segments_per_chunk.append(_parse_openai_json_segments(raw))
+            transcript = _parse_openai_verbose_transcript(raw)
+            segments_per_chunk.append(transcript.segments)
+            if transcript.text:
+                chunk_texts.append(transcript.text)
 
         merged = _merge_chunks_into_segments(segments_per_chunk, chunk_seconds)
+        if final_format in {"json", "srt", "vtt"} and not merged:
+            fail("OpenAI API 没有返回可合并的时间戳片段，无法生成 json/srt/vtt。")
 
         if final_format == "json":
             payload = {
@@ -791,7 +812,10 @@ def transcribe_audio(
                 f"[{format_seconds(s.start)} - {format_seconds(s.end)}] {s.text}"
                 for s in merged
             ]
-            write_text(out, "\n".join(lines) + "\n")
+            if lines:
+                write_text(out, "\n".join(lines) + "\n")
+            else:
+                write_text(out, "\n\n".join(chunk_texts) + ("\n" if chunk_texts else ""))
 
     return out
 
