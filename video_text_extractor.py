@@ -221,8 +221,13 @@ def _find_tessdata_dir_for_parts(parts: list[str], status: ToolStatus) -> Path |
         # Shouldn't happen (would have been caught by pass 1), but be safe.
         return best_dir
 
-    # Copy the missing language files from other directories into the best dir.
+    # Build a dedicated combined directory so we never mutate a user-owned
+    # Tesseract install or the project's own tessdata/.
     try:
+        cache_root = Path(__file__).resolve().parent / ".video_text_cache"
+        combined_dir = cache_root / "tessdata_combined"
+        combined_dir.mkdir(parents=True, exist_ok=True)
+
         for part in missing:
             src: Path | None = None
             for d in dirs:
@@ -233,10 +238,23 @@ def _find_tessdata_dir_for_parts(parts: list[str], status: ToolStatus) -> Path |
             if src is None:
                 # One required language cannot be found anywhere.
                 return None
-            dst = best_dir / f"{part}.traineddata"
+            dst = combined_dir / f"{part}.traineddata"
             if not dst.exists():
                 shutil.copy2(src, dst)
-        return best_dir
+
+        # Also make sure the languages already in best_dir are discoverable
+        # by adding symlinks (or copies on systems that don't support symlinks).
+        for part in parts:
+            combined_file = combined_dir / f"{part}.traineddata"
+            if not combined_file.exists():
+                candidate = best_dir / f"{part}.traineddata"
+                if candidate.exists():
+                    try:
+                        combined_file.symlink_to(candidate)
+                    except OSError:
+                        shutil.copy2(candidate, combined_file)
+
+        return combined_dir
     except OSError:
         return None
 

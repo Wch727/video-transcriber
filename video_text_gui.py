@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -389,8 +390,8 @@ class VideoTextWindow(QMainWindow):
 
         self.jobs: list[Job] = []
         self.active_processes: dict[int, subprocess.Popen[str]] = {}
-        self.process_outputs: queue.Queue[tuple[int, int, str]] = queue.Queue(maxsize=2000)
-        self.process_finishes: queue.Queue[tuple[int, int, int]] = queue.Queue(maxsize=256)
+        self.process_outputs: deque[tuple[int, int, str]] = deque(maxlen=2000)
+        self.process_finishes: deque[tuple[int, int, int]] = deque(maxlen=256)
         self.process_generation = 0
         self.process_pump = QTimer(self)
         self.process_pump.setInterval(80)
@@ -1355,30 +1356,24 @@ class VideoTextWindow(QMainWindow):
         try:
             if process.stdout is not None:
                 for text in process.stdout:
-                    self.process_outputs.put((generation, index, text))
+                    self.process_outputs.append((generation, index, text))
             exit_code = process.wait()
         except Exception as exc:
-            self.process_outputs.put((generation, index, f"Process error: {exc}\n"))
+            self.process_outputs.append((generation, index, f"Process error: {exc}\n"))
             polled = process.poll()
             exit_code = 1 if polled is None else polled
-        self.process_finishes.put((generation, index, exit_code))
+        self.process_finishes.append((generation, index, exit_code))
 
     def _drain_process_events(self) -> None:
-        while True:
-            try:
-                generation, _index, text = self.process_outputs.get_nowait()
-            except queue.Empty:
-                break
+        while self.process_outputs:
+            generation, _index, text = self.process_outputs.popleft()
             if generation != self.process_generation:
                 continue
             self.append_log(text)
             self._parse_progress(text)
 
-        while True:
-            try:
-                generation, index, exit_code = self.process_finishes.get_nowait()
-            except queue.Empty:
-                break
+        while self.process_finishes:
+            generation, index, exit_code = self.process_finishes.popleft()
             if generation != self.process_generation:
                 continue
             self._job_finished(index, exit_code)
@@ -1468,12 +1463,11 @@ class VideoTextWindow(QMainWindow):
             process.kill()
             del self.active_processes[index]
         job.status = STATUS_CANCELLED
-        self.process_generation += 1
-        self._clear_process_queues()
         s = STRINGS[self.ui_lang]
         self.append_log(f"\nSkipped: {job.video.name}\n")
         self.refresh_table()
-        # Advance to next waiting job.
+        # Advance to next waiting job without touching process_generation so
+        # that other still-running parallel jobs keep their finish events valid.
         self._fill_parallel_slots()
         if not self.active_processes and self._next_waiting_index() is None:
             self.finish_batch()
@@ -1484,12 +1478,8 @@ class VideoTextWindow(QMainWindow):
         super().closeEvent(event)
 
     def _clear_process_queues(self) -> None:
-        for events in (self.process_outputs, self.process_finishes):
-            while True:
-                try:
-                    events.get_nowait()
-                except queue.Empty:
-                    break
+        self.process_outputs.clear()
+        self.process_finishes.clear()
 
     def _set_editing_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -1576,30 +1566,24 @@ class VideoTextWindow(QMainWindow):
         if not srt_path:
             return
 
-        @staticmethod
-        def _video_duration_seconds(path: str) -> float:
-            """Return video duration in seconds using ffprobe; fall back to 0 on error."""
-            try:
-                status = detect_tools()
-                ffprobe = status.ffprobe
-                if not ffprobe:
-                    return 0.0
-                result = subprocess.run(
-                    [
-                        ffprobe, "-v", "quiet", "-show_entries", "format=duration",
-                        "-of", "default=noprint_wrappers=1:nokey=1", path,
-                    ],
-                    capture_output=True, text=True, timeout=10,
-                )
-                return float(result.stdout.strip())
-            except Exception:
-                return 0.0
-
         video_p = Path(video_path)
         output_path = video_p.parent / f"{video_p.stem}_subtitled.mp4"
 
         # Derive a generous timeout: 5× real-time for encoding, minimum 5 min.
-        duration = self._video_duration_seconds(video_path)
+        try:
+            _status = detect_tools()
+            _ffprobe = _status.ffprobe
+            if _ffprobe:
+                _r = subprocess.run(
+                    [_ffprobe, "-v", "quiet", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                    capture_output=True, text=True, timeout=10,
+                )
+                duration = float(_r.stdout.strip())
+            else:
+                duration = 0.0
+        except Exception:
+            duration = 0.0
         timeout = max(300, int(duration * 5) + 60) if duration > 0 else 600
 
         self.append_log(f"\nBurning subtitles: {video_p.name}\n")
