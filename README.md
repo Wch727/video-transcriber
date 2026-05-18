@@ -58,7 +58,7 @@ start_video_text_gui.bat
 
 ### 操作流程
 
-1. 添加视频：点击添加按钮，或者把 `.mp4` / `.mkv` / `.mov` 等视频拖进窗口。
+1. 添加视频：点击添加按钮，或者把 `.mp4` / `.mkv` / `.mov` / `.wmv` / `.flv` 等视频拖进窗口。
 2. 选择模式：本地 Whisper、OpenAI API、内嵌字幕、画面 OCR 或 Auto。
 3. 选择语言：不确定就选 Auto detect，明确语言就指定代码，例如 `en`、`zh`。
 4. 选择模型：`tiny` 快，`base` 均衡，`small` / `medium` 更准但更慢。
@@ -72,7 +72,7 @@ start_video_text_gui.bat
 | `Local Whisper` | 视频有语音，要转成文字；默认推荐 | `openai-whisper`、`imageio-ffmpeg` |
 | `OpenAI API` | 想用远程 API 转写 | `OPENAI_API_KEY` |
 | `Embedded subtitles` | 视频文件本身带字幕轨 | `ffmpeg`，`ffprobe` 推荐但不是硬依赖 |
-| `Visual OCR` | 字幕或文字是画面的一部分 | `tesseract` 和对应语言包 |
+| `Visual OCR` | 字幕或文字是画面的一部分，可在界面里指定 OCR 语言 | `tesseract` 和对应语言包 |
 | `Auto (best)` | 先试字幕轨，再回退到语音转写 | 取决于命中的模式 |
 
 ## Command Line
@@ -138,7 +138,7 @@ python video_text_extractor.py video.mp4 --dry-run
 | 参数 | 说明 |
 | --- | --- |
 | `--mode` | `whisper`、`audio`、`subtitle`、`ocr`、`auto` |
-| `--language` | 语言代码，例如 `en`、`zh`、`ja`、`ko`；不传则自动识别 |
+| `--language` | 语言代码，例如 `en`、`zh`、`ja`、`ko`；语音模式也接受 `en-US` 这类地区码，会取主语言；不传则自动识别 |
 | `--whisper-model` | `tiny`、`base`、`small`、`medium`、`large-v3`、`turbo` |
 | `--whisper-task` | `transcribe` 原语言转写，`translate` 翻译成英文 |
 | `--format` | `text`、`srt`、`vtt`、`json` |
@@ -170,7 +170,7 @@ Python 依赖写在 `requirements.txt`：
 
 ## Visual OCR
 
-Python CLI 的 `--mode ocr` 使用系统 `tesseract`。默认会优先使用 `chi_sim+eng`，如果只安装了英文语言包则自动退到 `eng`。项目里还带一个 Node.js 版 OCR 工具，适合截取视频底部字幕区域或整帧画面：
+Python CLI 的 `--mode ocr` 使用系统 `tesseract`。默认会优先使用 `chi_sim+eng`，如果只安装了英文语言包则自动退到 `eng`，也会识别 `TESSDATA_PREFIX` 或项目根目录 `tessdata` 里的语言包。自定义 OCR 语言可以写 `chi_sim+eng`，也可以写 `zh+en`，程序会映射成 Tesseract 语言包名。项目里还带一个 Node.js 版 OCR 工具，适合截取视频底部字幕区域或整帧画面：
 
 ```powershell
 npm install
@@ -188,6 +188,8 @@ node local_video_ocr.js video.mp4 --full-frame --interval 3 -o full_ocr.txt
 ```powershell
 node local_video_ocr.js video.mp4 --crop-bottom 0.42 --lang chi_sim+eng -o subtitle_ocr.txt
 ```
+
+Node 版 OCR 的 `--lang` 也支持 `zh+en`、`EN`、`en-US`、`zh-TW` 这类别名写法，会自动映射到 Tesseract 语言包名。
 
 ## Output
 

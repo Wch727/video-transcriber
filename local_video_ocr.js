@@ -13,6 +13,102 @@ const path = require("path");
 const { pathToFileURL } = require("url");
 const { createRequire } = require("module");
 
+const TESSERACT_LANG_MAP = {
+  zh: "chi_sim",
+  en: "eng",
+  ja: "jpn",
+  ko: "kor",
+  es: "spa",
+  fr: "fra",
+  de: "deu",
+  it: "ita",
+  pt: "por",
+  ru: "rus",
+  ar: "ara",
+  hi: "hin",
+  vi: "vie",
+  th: "tha",
+  tr: "tur",
+  nl: "nld",
+  sv: "swe",
+  pl: "pol",
+  uk: "ukr",
+  id: "ind",
+  ms: "msa",
+  bn: "ben",
+  ur: "urd",
+  fa: "fas",
+  he: "heb",
+  el: "ell",
+  cs: "ces",
+  da: "dan",
+  fi: "fin",
+  hu: "hun",
+  ro: "ron",
+  no: "nor",
+  ca: "cat",
+  la: "lat",
+  sk: "slk",
+  sl: "slv",
+  hr: "hrv",
+  sr: "srp",
+  bg: "bul",
+  lt: "lit",
+  lv: "lav",
+  et: "est",
+  sw: "swa",
+  ml: "mal",
+  ta: "tam",
+  te: "tel",
+  ka: "kat",
+  kk: "kaz",
+  ne: "nep",
+  am: "amh",
+  my: "mya",
+  km: "khm",
+  lo: "lao",
+  mn: "mon",
+  az: "aze",
+  uz: "uzb",
+};
+
+const TESSERACT_LANG_ALIASES = {
+  "zh-cn": "chi_sim",
+  "zh-sg": "chi_sim",
+  "zh-hans": "chi_sim",
+  "zh-tw": "chi_tra",
+  "zh-hk": "chi_tra",
+  "zh-mo": "chi_tra",
+  "zh-hant": "chi_tra",
+};
+
+function mapOcrLanguagePart(part) {
+  let normalized = part.toLowerCase();
+  const aliasKey = normalized.replace(/_/g, "-");
+  if (TESSERACT_LANG_ALIASES[aliasKey]) {
+    return TESSERACT_LANG_ALIASES[aliasKey];
+  }
+  if (normalized.includes("_")) {
+    const baseLanguage = normalized.split("_", 1)[0];
+    if (TESSERACT_LANG_MAP[baseLanguage]) {
+      return TESSERACT_LANG_MAP[baseLanguage];
+    }
+  }
+  if (normalized.includes("-")) {
+    normalized = normalized.split("-", 1)[0];
+  }
+  return TESSERACT_LANG_MAP[normalized] || normalized;
+}
+
+function mapOcrLanguage(lang) {
+  return lang
+    .trim()
+    .split(/[+ ]+/)
+    .filter(Boolean)
+    .map(mapOcrLanguagePart)
+    .join("+");
+}
+
 function loadPackage(packageName) {
   try {
     return require(packageName);
@@ -105,10 +201,20 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(args.minChars) || args.minChars < 0) throw new Error("--min-chars 必须大于等于 0");
 
+  args.lang = mapOcrLanguage(args.lang);
+  if (!args.lang) throw new Error("--lang 不能为空");
   args.video = path.resolve(args.video);
   if (!fs.existsSync(args.video)) throw new Error(`找不到视频文件: ${args.video}`);
+  if (!fs.statSync(args.video).isFile()) throw new Error(`不是视频文件: ${args.video}`);
   args.out = path.resolve(args.out || defaultOutput(args.video));
-  fs.mkdirSync(path.dirname(args.out), { recursive: true });
+  if (fs.existsSync(args.out) && fs.statSync(args.out).isDirectory()) {
+    throw new Error(`--out 必须是文件路径，不能是目录: ${args.out}`);
+  }
+  const outputDir = path.dirname(args.out);
+  if (fs.existsSync(outputDir) && !fs.statSync(outputDir).isDirectory()) {
+    throw new Error(`输出目录不是文件夹: ${outputDir}`);
+  }
+  fs.mkdirSync(outputDir, { recursive: true });
   return args;
 }
 

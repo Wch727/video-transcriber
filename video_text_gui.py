@@ -48,16 +48,24 @@ APP_DIR = Path(__file__).resolve().parent
 EXTRACTOR = APP_DIR / "video_text_extractor.py"
 HISTORY_FILE = APP_DIR / ".transcribe_history.json"
 
-VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
+VIDEO_EXTS = {
+    ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".wmv", ".flv",
+    ".mpg", ".mpeg", ".3gp", ".ts", ".mts", ".m2ts", ".ogv",
+}
 
 VIDEO_FILTERS = {
-    "All supported": "*.mp4 *.mov *.mkv *.webm *.m4v *.avi",
+    "All supported": "*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.wmv *.flv *.mpg *.mpeg *.3gp *.ts *.mts *.m2ts *.ogv",
     "MP4": "*.mp4",
     "MOV": "*.mov",
     "MKV": "*.mkv",
     "WEBM": "*.webm",
     "M4V": "*.m4v",
     "AVI": "*.avi",
+    "WMV": "*.wmv",
+    "FLV": "*.flv",
+    "MPEG/MPG": "*.mpeg *.mpg",
+    "Transport Stream": "*.ts *.mts *.m2ts",
+    "OGV": "*.ogv",
 }
 
 MODES = [
@@ -1042,6 +1050,7 @@ class VideoTextWindow(QMainWindow):
         rows = [
             (f"⚙ {s['local_whisper']}", status.local_whisper),
             (f"\U0001f3a5 ffmpeg", bool(ffmpeg_command(status))),
+            ("🔎 Tesseract OCR", bool(status.tesseract)),
             (f"\U0001f511 {s['openai_key']}", status.openai_key),
             (f"\U0001f7e2 {s['gpu']}", status.cuda_gpu),
         ]
@@ -1058,18 +1067,18 @@ class VideoTextWindow(QMainWindow):
     def _on_mode_changed(self) -> None:
         mode = self.mode_combo.currentData()
         uses_whisper_settings = mode in {"whisper", "auto"}
-        is_subtitle = mode == "subtitle"
+        has_output_format = mode not in {"subtitle", "ocr"}
         self.model_label.setVisible(uses_whisper_settings)
         self.model_combo.setVisible(uses_whisper_settings)
         self.model_hint.setVisible(uses_whisper_settings)
         self.task_label.setVisible(uses_whisper_settings)
         self.transcribe_radio.setVisible(uses_whisper_settings)
         self.translate_radio.setVisible(uses_whisper_settings)
-        self.language_label.setVisible(mode not in {"subtitle", "ocr"})
-        self.language_combo.setVisible(mode not in {"subtitle", "ocr"})
+        self.language_label.setVisible(mode != "subtitle")
+        self.language_combo.setVisible(mode != "subtitle")
         self._toggle_custom_language()
-        self.output_label.setVisible(not is_subtitle)
-        self.output_combo.setVisible(not is_subtitle)
+        self.output_label.setVisible(has_output_format)
+        self.output_combo.setVisible(has_output_format)
         self.parallel_label.setVisible(uses_whisper_settings)
         self.parallel_spin.setVisible(uses_whisper_settings)
         self.refresh_outputs()
@@ -1080,7 +1089,7 @@ class VideoTextWindow(QMainWindow):
     def _toggle_custom_language(self) -> None:
         mode = self.mode_combo.currentData()
         is_custom = self.language_to_code.get(self.language_combo.currentText()) == "custom"
-        visible = is_custom and mode not in {"subtitle", "ocr"}
+        visible = is_custom and mode != "subtitle"
         self.custom_label.setVisible(visible)
         self.custom_language.setVisible(visible)
 
@@ -1121,10 +1130,15 @@ class VideoTextWindow(QMainWindow):
     def add_video_path(self, path: Path) -> None:
         if self.active_processes:
             return
+        path = path.expanduser()
         s = STRINGS[self.ui_lang]
         if not path.exists():
             QMessageBox.warning(self, s["missing_file"], s["missing_file_msg"].format(path))
             return
+        if not path.is_file():
+            QMessageBox.warning(self, s["missing_file"], s["missing_file_msg"].format(path))
+            return
+        path = path.resolve()
         if any(job.video == path for job in self.jobs):
             return
         mode = self.mode_combo.currentData()
@@ -1148,7 +1162,7 @@ class VideoTextWindow(QMainWindow):
         self.refresh_table()
 
     def choose_output_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output_dir.text())
+        path = QFileDialog.getExistingDirectory(self, STRINGS[self.ui_lang]["output_folder"], str(self.output_directory()))
         if path:
             self.output_dir.setText(path)
 
@@ -1160,8 +1174,12 @@ class VideoTextWindow(QMainWindow):
         if hasattr(self, "table"):
             self.refresh_table()
 
+    def output_directory(self) -> Path:
+        raw = Path(self.output_dir.text().strip() or APP_DIR)
+        return raw if raw.is_absolute() else APP_DIR / raw
+
     def output_path_for(self, video: Path) -> Path:
-        output_dir = Path(self.output_dir.text().strip() or APP_DIR)
+        output_dir = self.output_directory()
         mode = self.mode_combo.currentData()
         if mode == "subtitle":
             return output_dir / f"{video.stem}_subtitles.srt"
@@ -1229,6 +1247,10 @@ class VideoTextWindow(QMainWindow):
                 command.extend(["--language", language])
             if self.translate_radio.isChecked():
                 command.extend(["--whisper-task", "translate"])
+        elif mode == "ocr":
+            language = self.language_code()
+            if language:
+                command.extend(["--language", language])
         elif mode == "audio":
             language = self.language_code()
             if language:
@@ -1243,7 +1265,7 @@ class VideoTextWindow(QMainWindow):
             QMessageBox.information(self, s["queue_empty"], s["queue_empty_msg"])
             return
         try:
-            Path(self.output_dir.text().strip() or APP_DIR).mkdir(parents=True, exist_ok=True)
+            self.output_directory().mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             QMessageBox.warning(self, s["missing_file"], str(exc))
             return
@@ -1466,14 +1488,23 @@ class VideoTextWindow(QMainWindow):
         self.append_log(f"Preview saved: {job.output}\n")
 
     def open_output_folder(self) -> None:
-        path = Path(self.output_dir.text().strip() or APP_DIR)
-        path.mkdir(parents=True, exist_ok=True)
-        if sys.platform == "win32":
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        path = self.output_directory()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            s = STRINGS[self.ui_lang]
+            QMessageBox.warning(self, s["missing_file"], str(exc))
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except OSError as exc:
+            s = STRINGS[self.ui_lang]
+            QMessageBox.warning(self, s["missing_file"], str(exc))
 
     # --- Burn subtitles ---
 
@@ -1524,7 +1555,19 @@ class VideoTextWindow(QMainWindow):
 
     def _ffmpeg_filter_path(self, path: str) -> str:
         value = Path(path).resolve().as_posix()
-        return value.replace("\\", "/").replace(":", r"\:").replace("'", r"\'").replace(" ", r"\ ")
+        replacements = {
+            "\\": "/",
+            ":": r"\:",
+            "'": r"\'",
+            " ": r"\ ",
+            ",": r"\,",
+            "[": r"\[",
+            "]": r"\]",
+            ";": r"\;",
+        }
+        for old, new in replacements.items():
+            value = value.replace(old, new)
+        return value
 
     # --- History ---
 

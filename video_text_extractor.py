@@ -56,11 +56,48 @@ _TESSERACT_LANG_MAP: dict[str, str] = {
     "uz": "uzb",
 }
 
+_TESSERACT_LANG_ALIASES: dict[str, str] = {
+    "zh-cn": "chi_sim",
+    "zh-sg": "chi_sim",
+    "zh-hans": "chi_sim",
+    "zh-tw": "chi_tra",
+    "zh-hk": "chi_tra",
+    "zh-mo": "chi_tra",
+    "zh-hant": "chi_tra",
+}
+
+
+def map_ocr_language_part(part: str) -> str:
+    normalized = part.lower()
+    alias_key = normalized.replace("_", "-")
+    if alias_key in _TESSERACT_LANG_ALIASES:
+        return _TESSERACT_LANG_ALIASES[alias_key]
+    if "_" in normalized:
+        base_language = normalized.split("_", 1)[0]
+        if base_language in _TESSERACT_LANG_MAP:
+            return _TESSERACT_LANG_MAP[base_language]
+    if "-" in normalized:
+        normalized = normalized.split("-", 1)[0]
+    return _TESSERACT_LANG_MAP.get(normalized, normalized)
+
 
 def map_ocr_language(code: str) -> str:
-    if "_" in code or "+" in code:
-        return code
-    return _TESSERACT_LANG_MAP.get(code, code)
+    stripped = code.strip()
+    if not stripped:
+        fail("--language 不能为空。")
+    parts = [part for part in re.split(r"[+ ]+", stripped) if part]
+    if len(parts) > 1:
+        return "+".join(map_ocr_language_part(part) for part in parts)
+    return map_ocr_language_part(stripped)
+
+
+def normalize_speech_language(code: str | None) -> str | None:
+    if not code:
+        return None
+    normalized = code.strip()
+    if not normalized:
+        return None
+    return re.split(r"[-_]", normalized, maxsplit=1)[0].lower()
 
 
 @dataclass(frozen=True)
@@ -109,9 +146,20 @@ def tesseract_language_parts(language: str) -> list[str]:
 
 def tesseract_data_dirs(status: ToolStatus) -> list[Path]:
     dirs = [Path(__file__).resolve().parent / "tessdata"]
+    tessdata_prefix = os.getenv("TESSDATA_PREFIX")
+    if tessdata_prefix:
+        prefix = Path(tessdata_prefix)
+        dirs.extend([prefix, prefix / "tessdata"])
     if status.tesseract:
         dirs.append(Path(status.tesseract).resolve().parent / "tessdata")
-    return dirs
+    unique_dirs: list[Path] = []
+    seen: set[Path] = set()
+    for data_dir in dirs:
+        resolved = data_dir.expanduser()
+        if resolved not in seen:
+            unique_dirs.append(resolved)
+            seen.add(resolved)
+    return unique_dirs
 
 
 def tesseract_data_dir_for(language: str, status: ToolStatus) -> Path | None:
@@ -127,6 +175,12 @@ def default_ocr_language(status: ToolStatus) -> str:
         return "chi_sim+eng"
     if tesseract_data_dir_for("eng", status):
         return "eng"
+    for data_dir in tesseract_data_dirs(status):
+        if not data_dir.exists():
+            continue
+        languages = sorted(path.stem for path in data_dir.glob("*.traineddata") if path.stem != "osd")
+        if languages:
+            return languages[0]
     return "chi_sim+eng"
 
 
@@ -206,6 +260,14 @@ def ensure_file(path: Path) -> Path:
     return path
 
 
+def ensure_output_file(path: Path) -> Path:
+    if path.exists() and path.is_dir():
+        fail(f"输出路径是目录，请指定文件路径: {path}")
+    if path.parent.exists() and not path.parent.is_dir():
+        fail(f"输出目录不是文件夹: {path.parent}")
+    return path
+
+
 def default_output(video: Path, mode: str, output_format: str = "txt") -> Path:
     suffix = {
         "audio": "transcript",
@@ -277,7 +339,27 @@ def subtitle_streams(video: Path, status: ToolStatus) -> list[dict[str, Any]]:
     return streams
 
 
-def extract_subtitles(video: Path, out: Path | None, status: ToolStatus) -> list[Path]:
+def subtitle_muxer(output_format: str | None) -> str | None:
+    if output_format == "vtt":
+        return "webvtt"
+    if output_format == "srt":
+        return "srt"
+    return None
+
+
+def subtitle_suffix(output_format: str | None) -> str:
+    if output_format in {"srt", "vtt"}:
+        return f".{output_format}"
+    return ".srt"
+
+
+def extract_subtitles(
+    video: Path,
+    out: Path | None,
+    status: ToolStatus,
+    *,
+    output_format: str | None = None,
+) -> list[Path]:
     ffmpeg = ffmpeg_command(status)
     if not ffmpeg:
         fail("字幕提取需要安装 ffmpeg，并确保它在 PATH 中。")
@@ -287,27 +369,30 @@ def extract_subtitles(video: Path, out: Path | None, status: ToolStatus) -> list
         fail("视频里没有检测到内嵌字幕轨。")
 
     outputs: list[Path] = []
+    default_suffix = subtitle_suffix(output_format)
     for i, stream in enumerate(streams):
         if out and i == 0:
             output_path = out
         elif out:
-            output_path = out.with_name(f"{out.stem}_{i}{out.suffix or '.srt'}")
+            output_path = out.with_name(f"{out.stem}_{i}{out.suffix or default_suffix}")
         else:
             lang = stream.get("tags", {}).get("language", f"{i}")
-            output_path = video.with_name(f"{video.stem}_subtitle_{i}_{lang}.srt")
+            output_path = video.with_name(f"{video.stem}_subtitle_{i}_{lang}{default_suffix}")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        run_command(
-            [
-                ffmpeg,
-                "-y",
-                "-i",
-                str(video),
-                "-map",
-                f"0:s:{i}",
-                str(output_path),
-            ]
-        )
+        command = [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(video),
+            "-map",
+            f"0:s:{i}",
+        ]
+        muxer = subtitle_muxer(output_format)
+        if muxer:
+            command.extend(["-f", muxer])
+        command.append(str(output_path))
+        run_command(command)
         outputs.append(output_path)
         print(f"已写入: {output_path}")
     return outputs
@@ -370,7 +455,7 @@ def write_subtitle_segments(out: Path, segments: list[dict[str, Any]], output_fo
 
 def extract_subtitles_as(video: Path, out: Path, status: ToolStatus, output_format: str) -> Path:
     if output_format in {"srt", "vtt"}:
-        outputs = extract_subtitles(video, out, status)
+        outputs = extract_subtitles(video, out, status, output_format=output_format)
         return outputs[0]
 
     with local_temp_dir(out.parent, "video_subtitle_") as temp_dir:
@@ -740,7 +825,7 @@ def run_auto(video: Path, out: Path, status: ToolStatus, args: argparse.Namespac
             streams = subtitle_streams(video, status)
             if streams:
                 if args.format in {"srt", "vtt"}:
-                    outputs = extract_subtitles(video, out, status)
+                    outputs = extract_subtitles(video, out, status, output_format=args.format)
                     return outputs[0]
                 with local_temp_dir(out.parent, "video_subtitle_") as temp_dir:
                     temp_srt = temp_dir / "embedded.srt"
@@ -854,11 +939,15 @@ def main(argv: list[str] | None = None) -> int:
         fail("--max-upload-mb 必须大于 0。")
     if args.chunk_seconds <= 0:
         fail("--chunk-seconds 必须大于 0。")
+    if args.mode == "ocr" and args.format != "text":
+        fail("OCR 模式只支持 text 输出。请移除 --format 或使用 --format text。")
+    if args.mode != "ocr":
+        args.language = normalize_speech_language(args.language)
 
     output_format = args.format
     if args.mode == "ocr":
         output_format = "txt"
-    out = args.out or default_output(video, args.mode, output_format)
+    out = ensure_output_file(args.out or default_output(video, args.mode, output_format))
 
     try:
         if args.mode == "subtitle":
