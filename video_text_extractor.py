@@ -4,7 +4,7 @@
 Supported modes:
   audio     Transcribe speech from the video's audio with the OpenAI API.
   whisper   Transcribe speech locally with openai-whisper, no API key required.
-  subtitle  Extract embedded subtitle tracks with ffmpeg/ffprobe.
+  subtitle  Extract embedded subtitle tracks with ffmpeg; ffprobe is optional.
   ocr       OCR visible text from sampled video frames with ffmpeg + tesseract.
   auto      Try embedded subtitles first, then local Whisper, then OpenAI.
 
@@ -78,6 +78,58 @@ def which(name: str) -> str | None:
     return shutil.which(name)
 
 
+def first_existing(paths: list[Path]) -> str | None:
+    for path in paths:
+        if path.exists():
+            return str(path)
+    return None
+
+
+def winget_ffmpeg_executable(name: str) -> str | None:
+    local_appdata = os.getenv("LOCALAPPDATA")
+    if not local_appdata:
+        return None
+    root = Path(local_appdata) / "Microsoft" / "WinGet" / "Packages"
+    if not root.exists():
+        return None
+    matches = sorted(root.glob(f"Gyan.FFmpeg_*/*/bin/{name}.exe"), reverse=True)
+    return str(matches[0]) if matches else None
+
+
+def tesseract_executable() -> str | None:
+    return which("tesseract") or first_existing([
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tesseract-OCR" / "tesseract.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Tesseract-OCR" / "tesseract.exe",
+    ])
+
+
+def tesseract_language_parts(language: str) -> list[str]:
+    return [part for part in re.split(r"[+ ]+", language.strip()) if part]
+
+
+def tesseract_data_dirs(status: ToolStatus) -> list[Path]:
+    dirs = [Path(__file__).resolve().parent / "tessdata"]
+    if status.tesseract:
+        dirs.append(Path(status.tesseract).resolve().parent / "tessdata")
+    return dirs
+
+
+def tesseract_data_dir_for(language: str, status: ToolStatus) -> Path | None:
+    parts = tesseract_language_parts(language)
+    for data_dir in tesseract_data_dirs(status):
+        if data_dir.exists() and all((data_dir / f"{part}.traineddata").exists() for part in parts):
+            return data_dir
+    return None
+
+
+def default_ocr_language(status: ToolStatus) -> str:
+    if tesseract_data_dir_for("chi_sim+eng", status):
+        return "chi_sim+eng"
+    if tesseract_data_dir_for("eng", status):
+        return "eng"
+    return "chi_sim+eng"
+
+
 def _detect_cuda() -> bool:
     try:
         import torch
@@ -88,9 +140,9 @@ def _detect_cuda() -> bool:
 
 def detect_tools() -> ToolStatus:
     return ToolStatus(
-        ffmpeg=which("ffmpeg"),
-        ffprobe=which("ffprobe"),
-        tesseract=which("tesseract"),
+        ffmpeg=which("ffmpeg") or winget_ffmpeg_executable("ffmpeg"),
+        ffprobe=which("ffprobe") or winget_ffmpeg_executable("ffprobe"),
+        tesseract=tesseract_executable(),
         openai_key=bool(os.getenv("OPENAI_API_KEY")),
         local_whisper=module_available("whisper"),
         imageio_ffmpeg=module_available("imageio_ffmpeg"),
@@ -162,10 +214,7 @@ def default_output(video: Path, mode: str, output_format: str = "txt") -> Path:
         "ocr": "ocr",
         "auto": "text",
     }.get(mode, "text")
-    if mode == "subtitle":
-        ext = "srt"
-    else:
-        ext = "txt" if output_format in {"text", "verbose_json"} else output_format
+    ext = "txt" if output_format in {"text", "verbose_json"} else output_format
     return video.with_name(f"{video.stem}_{suffix}.{ext}")
 
 
@@ -189,24 +238,43 @@ def dump_status(video: Path, status: ToolStatus) -> None:
 
 
 def subtitle_streams(video: Path, status: ToolStatus) -> list[dict[str, Any]]:
-    if not status.ffprobe:
-        fail("字幕提取需要安装 ffprobe，并确保它在 PATH 中。")
-    result = run_command(
-        [
-            status.ffprobe,
-            "-v",
-            "error",
-            "-show_streams",
-            "-select_streams",
-            "s",
-            "-of",
-            "json",
-            str(video),
-        ],
-        quiet=True,
+    if status.ffprobe:
+        result = run_command(
+            [
+                status.ffprobe,
+                "-v",
+                "error",
+                "-show_streams",
+                "-select_streams",
+                "s",
+                "-of",
+                "json",
+                str(video),
+            ],
+            quiet=True,
+        )
+        data = json.loads(result.stdout or "{}")
+        return data.get("streams", [])
+
+    ffmpeg = ffmpeg_command(status)
+    if not ffmpeg:
+        fail("字幕提取需要 ffmpeg 或 ffprobe。")
+
+    result = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", str(video)],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    data = json.loads(result.stdout or "{}")
-    return data.get("streams", [])
+    streams: list[dict[str, Any]] = []
+    for line in result.stderr.splitlines():
+        if "Subtitle:" not in line:
+            continue
+        match = re.search(r"Stream #\d+:\d+(?:\[[^\]]+\])?(?:\(([^)]+)\))?: Subtitle:", line)
+        lang = match.group(1) if match and match.group(1) else str(len(streams))
+        streams.append({"tags": {"language": lang}})
+    return streams
 
 
 def extract_subtitles(video: Path, out: Path | None, status: ToolStatus) -> list[Path]:
@@ -280,10 +348,36 @@ def write_subtitle_segments(out: Path, segments: list[dict[str, Any]], output_fo
             "segments": segments,
         }
         write_text(out, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    elif output_format == "srt":
+        blocks = []
+        for index, segment in enumerate(segments, start=1):
+            start = format_subtitle_time(float(segment["start"]), comma=True)
+            end = format_subtitle_time(float(segment["end"]), comma=True)
+            blocks.append(f"{index}\n{start} --> {end}\n{segment['text']}")
+        write_text(out, "\n\n".join(blocks) + ("\n" if blocks else ""))
+    elif output_format == "vtt":
+        blocks = ["WEBVTT"]
+        for segment in segments:
+            start = format_subtitle_time(float(segment["start"]), comma=False)
+            end = format_subtitle_time(float(segment["end"]), comma=False)
+            blocks.append(f"{start} --> {end}\n{segment['text']}")
+        write_text(out, "\n\n".join(blocks) + "\n")
     else:
         text = "\n".join(str(segment["text"]) for segment in segments)
         write_text(out, text + ("\n" if text else ""))
     return out
+
+
+def extract_subtitles_as(video: Path, out: Path, status: ToolStatus, output_format: str) -> Path:
+    if output_format in {"srt", "vtt"}:
+        outputs = extract_subtitles(video, out, status)
+        return outputs[0]
+
+    with local_temp_dir(out.parent, "video_subtitle_") as temp_dir:
+        temp_srt = temp_dir / "embedded.srt"
+        outputs = extract_subtitles(video, temp_srt, status)
+        segments = read_srt_segments(outputs[0])
+    return write_subtitle_segments(out, segments, output_format)
 
 
 def api_response_to_text(response: Any, response_format: str) -> str:
@@ -424,9 +518,9 @@ def transcribe_audio(
 
 
 def ensure_ffmpeg_for_whisper(status: ToolStatus) -> Path | None:
-    if status.ffmpeg:
+    if which("ffmpeg"):
         return None
-    ffmpeg_exe = imageio_ffmpeg_exe()
+    ffmpeg_exe = status.ffmpeg or imageio_ffmpeg_exe()
     if not ffmpeg_exe:
         fail("本地 Whisper 需要 ffmpeg。可安装: python -m pip install imageio-ffmpeg")
     return Path(ffmpeg_exe)
@@ -451,15 +545,18 @@ def transcribe_with_local_whisper(
     ffmpeg_exe = ensure_ffmpeg_for_whisper(status)
     old_path = os.environ.get("PATH", "")
     if ffmpeg_exe:
-        # Whisper launches a literal "ffmpeg" command. imageio-ffmpeg ships a
-        # versioned executable name, so expose a reusable shim.
-        shim_dir = out.parent / ".video_text_cache"
-        shim_dir.mkdir(parents=True, exist_ok=True)
         shim_name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-        shim = shim_dir / shim_name
-        if not shim.exists() or shim.stat().st_size != ffmpeg_exe.stat().st_size:
-            shutil.copy2(ffmpeg_exe, shim)
-        os.environ["PATH"] = str(shim.parent) + os.pathsep + old_path
+        if ffmpeg_exe.name.lower() == shim_name:
+            os.environ["PATH"] = str(ffmpeg_exe.parent) + os.pathsep + old_path
+        else:
+            # Whisper launches a literal "ffmpeg" command. imageio-ffmpeg ships a
+            # versioned executable name, so expose a reusable shim.
+            shim_dir = out.parent / ".video_text_cache"
+            shim_dir.mkdir(parents=True, exist_ok=True)
+            shim = shim_dir / shim_name
+            if not shim.exists() or shim.stat().st_size != ffmpeg_exe.stat().st_size:
+                shutil.copy2(ffmpeg_exe, shim)
+            os.environ["PATH"] = str(shim.parent) + os.pathsep + old_path
 
     print(f"加载本地 Whisper 模型: {model_name}")
     print("第一次运行会下载模型；下载完成后可离线复用。")
@@ -571,6 +668,9 @@ def ocr_frames(
         fail("画面 OCR 需要安装 tesseract，并安装对应语言包，例如 chi_sim 和 eng。")
     if interval <= 0:
         fail("--ocr-interval 必须大于 0。")
+    tessdata_dir = tesseract_data_dir_for(language, status)
+    if not tessdata_dir:
+        fail(f"缺少 OCR 语言包: {language}。请安装对应 traineddata，或改用已安装语言。")
 
     with local_temp_dir(out.parent, "video_ocr_") as temp_dir:
         frame_pattern = temp_dir / "frame_%06d.png"
@@ -603,6 +703,8 @@ def ocr_frames(
                     language,
                     "--psm",
                     "6",
+                    "--tessdata-dir",
+                    str(tessdata_dir),
                 ],
                 quiet=True,
             )
@@ -633,7 +735,7 @@ def format_subtitle_time(seconds: float, *, comma: bool) -> str:
 
 
 def run_auto(video: Path, out: Path, status: ToolStatus, args: argparse.Namespace) -> Path:
-    if ffmpeg_command(status) and status.ffprobe:
+    if ffmpeg_command(status):
         try:
             streams = subtitle_streams(video, status)
             if streams:
@@ -710,7 +812,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="显示本地 Whisper 的详细转写进度。",
     )
-    parser.add_argument("--language", help="语音语言代码，例如 zh/en。OCR 模式默认使用 chi_sim+eng。")
+    parser.add_argument("--language", help="语音语言代码，例如 zh/en。OCR 模式会从已安装语言包中选择默认值。")
     parser.add_argument("--prompt", help="给转写模型的提示词，例如专有名词、课程主题等。")
     parser.add_argument(
         "--max-upload-mb",
@@ -760,9 +862,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.mode == "subtitle":
-            extract_subtitles(video, out, status)
+            extract_subtitles_as(video, out, status, args.format)
         elif args.mode == "ocr":
-            ocr_language = map_ocr_language(args.language) if args.language else "chi_sim+eng"
+            ocr_language = map_ocr_language(args.language) if args.language else default_ocr_language(status)
             ocr_frames(video, out, status, interval=args.ocr_interval, language=ocr_language)
         elif args.mode == "whisper":
             transcribe_with_local_whisper(

@@ -1,198 +1,244 @@
 # Video Text Extractor
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Whisper](https://img.shields.io/badge/Powered%20by-OpenAI%20Whisper-orange)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![GUI](https://img.shields.io/badge/Desktop-PySide6-41CD52)
+![Whisper](https://img.shields.io/badge/Local-Whisper-FFB020)
+![Platform](https://img.shields.io/badge/Platform-Windows-0078D4)
+![License](https://img.shields.io/badge/License-MIT-2EA043)
 
-A local video-to-text tool with a desktop GUI and CLI. Uses OpenAI Whisper locally by default — no API key required.
+把视频里的语音、字幕轨或画面文字提取成可编辑文本。
 
-一个本地视频转文字工具，支持桌面 GUI 和命令行。默认使用本地 Whisper 模型，无需 API Key。
+默认走本地 Whisper，不需要 API Key；也可以切换到 OpenAI API、内嵌字幕提取、画面 OCR，或者直接导出 SRT/VTT 字幕。
 
----
+> 适合课程视频、会议录屏、英文视频转英文稿、字幕文件制作、以及把屏幕里的字幕/幻灯片文字提取出来。
 
-## Features / 功能
+## Highlights
 
-- **Desktop GUI** — Add video files, choose language/model/format, batch process with one click.
-- **桌面 GUI** — 添加视频，选择语言/模型/格式，一键批量处理。
-- **5 Transcription Modes** — Local Whisper, OpenAI API, embedded subtitle extraction, visual OCR, auto-select best.
-- **5 种转写模式** — 本地 Whisper、OpenAI API、内嵌字幕提取、画面 OCR、自动选择最佳方式。
-- **Auto Language Detection** — Whisper automatically detects the spoken language.
-- **自动识别语言** — Whisper 自动检测视频中的语音语言。
-- **Translate to English** — Translate any language speech into English text.
-- **翻译成英文** — 将任意语言的语音翻译成英文文本。
-- **55+ Languages** — English, Chinese, Japanese, Korean, Spanish, French, German, Arabic, Hindi, Thai, and many more.
-- **55+ 种语言** — 英语、中文、日语、韩语、西班牙语、法语、德语、阿拉伯语、印地语、泰语等。
-- **Multiple Output Formats** — TXT, SRT (subtitles), VTT (web subtitles), JSON (full metadata).
-- **多种输出格式** — TXT、SRT（字幕）、VTT（Web 字幕）、JSON（完整元数据）.
-- **Drag & Drop** — Drag video files directly into the window to add them.
-- **拖拽添加** — 直接把视频文件拖到窗口即可添加。
-- **Real-time Progress** — Progress bar shows actual percentage from Whisper.
-- **实时进度** — 进度条显示 Whisper 的真实转写百分比。
-- **Parallel Processing** — Run 1-4 transcription jobs simultaneously.
-- **并行转写** — 同时运行 1-4 个转写任务。
-- **Burn Subtitles** — Hardcode SRT subtitles into video using ffmpeg.
-- **烧录字幕** — 用 ffmpeg 把 SRT 字幕硬编码到视频中。
-- **Model Auto-recommend** — Suggests the best Whisper model based on video duration.
-- **模型自动推荐** — 根据视频时长推荐最合适的 Whisper 模型。
-- **Transcription History** — Save and reload past transcription jobs with parameters.
-- **转写历史** — 保存和加载历史转写记录及参数。
-- **Local & Offline** — Videos stay on your machine. Whisper models are cached after first download.
-- **本地离线** — 视频不离开本机，Whisper 模型首次下载后可离线复用。
-- **CLI Mode** — Scriptable batch transcription for power users.
-- **命令行模式** — 适合批处理或自动化场景。
-- **Visual OCR** — Optional `local_video_ocr.js` extracts on-screen text from video frames.
-- **画面 OCR** — 可选的 `local_video_ocr.js` 从视频画面中识别文字。
-- **Bilingual UI** — Switch between Chinese and English interface with one click.
-- **双语界面** — 一键切换中文/英文界面。
+| 能力 | 说明 |
+| --- | --- |
+| 桌面软件体验 | PySide6 图形界面，双击启动，拖拽视频，队列批量处理 |
+| 本地优先 | 本地 Whisper 转写，视频不离开电脑，模型下载后可复用 |
+| 5 种模式 | Local Whisper、OpenAI API、Embedded Subtitles、Visual OCR、Auto |
+| 多语言 | 支持自动识别，也可指定 `en`、`zh`、`ja`、`ko`、`es`、`fr` 等语言 |
+| 多格式输出 | `TXT`、`SRT`、`VTT`、`JSON` |
+| 批量和历史 | 支持 1-4 个任务并行、实时日志、输出预览、历史记录恢复 |
+| 字幕工作流 | 可生成字幕文件，也可把 SRT 硬烧进视频 |
 
----
+## Quick Start
 
-## Quick Start / 快速开始
-
-### Install / 安装
+安装依赖：
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-Whisper models download automatically on first use (`tiny`, `base`, `small`, `medium`).
-
-首次使用时自动下载 Whisper 模型。
-
-### Launch GUI / 启动桌面版
-
-Double-click `start_video_text_gui.bat` or run:
-
-双击 `start_video_text_gui.bat`，或运行：
+启动桌面版：
 
 ```powershell
 python video_text_gui.py
 ```
 
-### GUI Guide / GUI 使用说明
+也可以直接双击：
 
-**Layout / 界面布局：**
-- **Left sidebar** — Runtime status, add videos button, language toggle.
-- **左侧边栏** — 运行状态检测、添加视频按钮、界面语言切换。
-- **Left panel** — Settings: mode, format, language, model, output, task, parallel count.
-- **左侧设置面板** — 模式、格式、语言、模型、输出、任务、并行数。
-- **Right panel** — Queue table, preview area, log, and history.
-- **右侧主区域** — 队列表格、预览区、日志、历史记录。
-
-**Steps / 操作步骤：**
-
-1. **Add videos** — Click the sidebar button, or drag video files into the window.
-   **添加视频** — 点击侧边栏按钮，或直接拖拽视频文件到窗口。
-2. **Choose mode** — Whisper (local), OpenAI API, subtitles, OCR, or auto.
-   **选择模式** — Whisper（本地）、OpenAI API、字幕提取、OCR 或自动。
-3. **Choose language** — Auto detect, specific language, or custom code.
-   **选择语言** — 自动识别、指定语言或自定义代码。
-4. **Choose model** — `tiny` fastest, `base` balanced, `small`/`medium` more accurate.
-   **选择模型** — `tiny` 最快，`base` 均衡，`small`/`medium` 更准。
-5. **Choose output** — TXT, SRT, VTT, or JSON.
-   **选择输出格式** — TXT、SRT、VTT 或 JSON。
-6. **Choose task** — Transcribe (original language) or translate to English.
-   **选择任务** — 转写（原语言）或翻译成英文。
-7. **Click Start** — Jobs process in the queue. Progress shows real percentage.
-   **点击开始** — 队列中的任务依次处理，进度条显示真实百分比。
-
-**Other / 其他：**
-- Burn subtitles: click the red "Burn subtitles" button, select video + SRT file.
-  烧录字幕：点击红色"烧录字幕"按钮，选择视频和 SRT 文件。
-- History: double-click a past record in the history panel to reload it.
-  历史记录：双击历史面板中的记录可重新加载。
-- Parallel: set 1-4 in the "Parallel" spinner for concurrent jobs.
-  并行数：在"并行数"中设置 1-4，多个任务同时处理。
-
----
-
-## CLI Usage / 命令行用法
-
-English video to text:
-
-```powershell
-python video_text_extractor.py video.mp4 --mode whisper --whisper-model base --language en
+```text
+start_video_text_gui.bat
 ```
 
-Output subtitles:
+最常见场景：英语视频转英语文字。
+
+1. 模式选 `Local Whisper`
+2. 语言选 `English (en)`
+3. 任务选 `Transcribe`
+4. 输出选 `TXT` 或 `SRT`
+5. 点击开始
+
+## Desktop App
+
+桌面版是推荐入口。它会帮你处理文件队列、输出路径、模型参数和运行日志，适合不想每次敲命令的人。
+
+### 操作流程
+
+1. 添加视频：点击添加按钮，或者把 `.mp4` / `.mkv` / `.mov` 等视频拖进窗口。
+2. 选择模式：本地 Whisper、OpenAI API、内嵌字幕、画面 OCR 或 Auto。
+3. 选择语言：不确定就选 Auto detect，明确语言就指定代码，例如 `en`、`zh`。
+4. 选择模型：`tiny` 快，`base` 均衡，`small` / `medium` 更准但更慢。
+5. 选择输出：TXT 用于阅读，SRT/VTT 用于字幕，JSON 用于后续处理。
+6. 开始队列：运行中界面会锁住关键设置，避免任务和输出路径错乱。
+
+### 模式怎么选
+
+| 模式 | 适合场景 | 额外依赖 |
+| --- | --- | --- |
+| `Local Whisper` | 视频有语音，要转成文字；默认推荐 | `openai-whisper`、`imageio-ffmpeg` |
+| `OpenAI API` | 想用远程 API 转写 | `OPENAI_API_KEY` |
+| `Embedded subtitles` | 视频文件本身带字幕轨 | `ffmpeg`，`ffprobe` 推荐但不是硬依赖 |
+| `Visual OCR` | 字幕或文字是画面的一部分 | `tesseract` 和对应语言包 |
+| `Auto (best)` | 先试字幕轨，再回退到语音转写 | 取决于命中的模式 |
+
+## Command Line
+
+GUI 之外，所有核心能力也能用命令行调用。
+
+本地 Whisper 转写：
+
+```powershell
+python video_text_extractor.py video.mp4 --mode whisper --whisper-model base --language en -o transcript.txt
+```
+
+自动识别语言：
+
+```powershell
+python video_text_extractor.py video.mp4 --mode whisper --whisper-model base -o transcript.txt
+```
+
+导出 SRT 字幕：
 
 ```powershell
 python video_text_extractor.py video.mp4 --mode whisper --format srt -o subtitles.srt
 ```
 
-Auto-detect language:
+导出 VTT 字幕：
 
 ```powershell
-python video_text_extractor.py video.mp4 --mode whisper --whisper-model base
+python video_text_extractor.py video.mp4 --mode whisper --format vtt -o subtitles.vtt
 ```
 
-Translate to English:
+导出 JSON 元数据：
 
 ```powershell
-python video_text_extractor.py video.mp4 --mode whisper --whisper-task translate --format vtt -o translated.vtt
+python video_text_extractor.py video.mp4 --mode whisper --format json -o transcript.json
 ```
 
-Extract embedded subtitles:
+翻译成英文：
 
 ```powershell
-python video_text_extractor.py video.mp4 --mode subtitle
+python video_text_extractor.py video.mp4 --mode whisper --whisper-task translate -o translated.txt
 ```
 
-### CLI Options / 命令行参数
+提取内嵌字幕：
 
-| Flag | Description |
-|------|-------------|
-| `--mode` | `whisper` (local), `audio` (OpenAI API), `subtitle`, `ocr`, `auto` |
-| `--whisper-model` | `tiny` / `base` / `small` / `medium` / `large` |
-| `--language` | Language code: `en`, `zh`, `ja`, `es`, etc. |
-| `--format` | `text`, `srt`, `vtt`, `json` |
-| `--whisper-task` | `transcribe` (original) or `translate` (to English) |
-| `-o` | Output file path |
+```powershell
+python video_text_extractor.py video.mp4 --mode subtitle -o subtitles.srt
+```
 
----
+画面 OCR：
 
-## Output Formats / 输出格式
+```powershell
+python video_text_extractor.py video.mp4 --mode ocr --ocr-interval 2 -o ocr.txt
+```
 
-| Format | Description |
-|--------|-------------|
-| **TXT** | Timestamped plain text / 带时间戳的纯文本 |
-| **SRT** | Standard subtitle format / 标准字幕格式 |
-| **VTT** | Web subtitle format / Web 字幕格式 |
-| **JSON** | Full text + language + segment metadata / 完整元数据 |
+只检查环境，不执行转写：
 
----
+```powershell
+python video_text_extractor.py video.mp4 --dry-run
+```
 
-## Visual OCR / 画面 OCR
+## Options
 
-Extract on-screen text (subtitles, slides, titles) from video frames using `local_video_ocr.js`:
+| 参数 | 说明 |
+| --- | --- |
+| `--mode` | `whisper`、`audio`、`subtitle`、`ocr`、`auto` |
+| `--language` | 语言代码，例如 `en`、`zh`、`ja`、`ko`；不传则自动识别 |
+| `--whisper-model` | `tiny`、`base`、`small`、`medium`、`large-v3`、`turbo` |
+| `--whisper-task` | `transcribe` 原语言转写，`translate` 翻译成英文 |
+| `--format` | `text`、`srt`、`vtt`、`json` |
+| `--ocr-interval` | OCR 每隔多少秒抽一帧 |
+| `-o`, `--out` | 输出文件路径，父目录会自动创建 |
+| `--dry-run` | 只检测依赖和配置 |
+
+## Dependencies
+
+Python 依赖写在 `requirements.txt`：
+
+| 包 | 用途 |
+| --- | --- |
+| `PySide6` | 桌面 GUI |
+| `openai-whisper` | 本地语音转写 |
+| `imageio-ffmpeg` | 提供可复用的 ffmpeg 可执行文件 |
+| `openai` | OpenAI API 转写 |
+
+可选系统工具：
+
+| 工具 | 什么时候需要 |
+| --- | --- |
+| `ffmpeg` | 提取视频内嵌字幕轨、抽帧 OCR、音频切片 |
+| `ffprobe` | 推荐安装，用于更准确地检测视频内嵌字幕轨；没有时会回退到 `ffmpeg` |
+| `tesseract` | Python OCR 模式识别画面文字 |
+| Chrome / Edge | Node.js 版画面 OCR 解码视频 |
+
+说明：本地 Whisper 和部分视频处理会自动复用 `imageio-ffmpeg` 自带的 ffmpeg；如果通过 winget 安装 Gyan FFmpeg，程序也会自动查找 winget 安装目录里的 `ffmpeg.exe` / `ffprobe.exe`。`ffprobe` 不是硬依赖，但装完整 FFmpeg 套件会让字幕轨检测更稳。
+
+## Visual OCR
+
+Python CLI 的 `--mode ocr` 使用系统 `tesseract`。默认会优先使用 `chi_sim+eng`，如果只安装了英文语言包则自动退到 `eng`。项目里还带一个 Node.js 版 OCR 工具，适合截取视频底部字幕区域或整帧画面：
 
 ```powershell
 npm install
 node local_video_ocr.js video.mp4 --interval 1 -o ocr_output.txt
 ```
 
-Full-frame OCR:
+识别整张画面：
 
 ```powershell
 node local_video_ocr.js video.mp4 --full-frame --interval 3 -o full_ocr.txt
 ```
 
----
+只识别底部字幕区域：
 
-## Project Structure / 项目结构
-
-```
-video_text_gui.py          # Desktop GUI / 桌面界面
-video_text_extractor.py    # Core transcription engine / 核心转写引擎
-local_video_ocr.js         # Visual OCR tool / 画面 OCR 工具
-start_video_text_gui.bat   # Windows launcher / Windows 启动器
-requirements.txt           # Python dependencies / Python 依赖
-package.json               # Node.js dependencies (OCR) / Node.js 依赖
+```powershell
+node local_video_ocr.js video.mp4 --crop-bottom 0.42 --lang chi_sim+eng -o subtitle_ocr.txt
 ```
 
----
+## Output
 
-## License / 许可证
+默认输出目录是项目下的 `outputs` 文件夹。桌面版会按模式和语言自动生成文件名：
 
-[MIT](LICENSE)
+```text
+video_transcript_en.txt
+video_transcript_zh.srt
+video_subtitles.srt
+video_ocr.txt
+```
+
+历史记录保存在 `.transcribe_history.json`，已加入 `.gitignore`。视频、输出文件、缓存目录也默认不会提交到 Git。
+
+## Troubleshooting
+
+### 英语视频转英语稿为什么不要选 Translate？
+
+`Transcribe` 是按原语言转写，英语视频会输出英文稿。`Translate to English` 是把非英语语音翻译成英文。
+
+### subtitle 模式失败怎么办？
+
+这个模式只处理“视频文件里真正存在的字幕轨”。如果字幕只是画面里看得见的字，用 OCR；如果是语音内容，用 Whisper。
+
+### OCR 模式失败怎么办？
+
+确认已经安装 `tesseract` 和语言包。英文常用 `eng`，简体中文常用 `chi_sim`，混合识别可用 `chi_sim+eng`。Windows 安装程序通常只自带 `eng` / `osd`，中文 OCR 需要把 `chi_sim.traineddata` 放进 Tesseract 的 `tessdata` 目录，或放进项目根目录的 `tessdata` 文件夹。
+
+### 第一次转写为什么慢？
+
+Whisper 首次会下载模型。模型越大越慢，越吃 CPU/GPU。短视频可先试 `base`，长视频可先用 `tiny` 或 `base`。
+
+### OpenAI API 模式怎么设置 Key？
+
+```powershell
+$env:OPENAI_API_KEY="你的 API Key"
+python video_text_extractor.py video.mp4 --mode audio --language en -o transcript.txt
+```
+
+## Project Structure
+
+```text
+video_text_gui.py          Desktop GUI
+video_text_extractor.py    Core CLI engine
+local_video_ocr.js         Node.js visual OCR helper
+start_video_text_gui.bat   Windows launcher
+requirements.txt           Python dependencies
+package.json               Node.js OCR dependencies
+LICENSE                    MIT license
+```
+
+## License
+
+MIT. See [LICENSE](LICENSE).

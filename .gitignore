@@ -5,6 +5,8 @@ node_modules/
 venv/
 env/
 .video_text_cache/
+tessdata/
+*.traineddata
 uploads/
 outputs/
 *.mp4

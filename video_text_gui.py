@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -148,6 +149,7 @@ STRINGS = {
         "status_running": "运行中",
         "status_done": "完成",
         "status_cancelled": "已取消",
+        "waiting_status": "等待中",
         "page_title": "转写工作区",
         "page_caption": "批量处理视频，选择语言，导出文本或字幕。",
         "open_folder": "打开输出目录",
@@ -217,6 +219,7 @@ STRINGS = {
         "status_running": "Running",
         "status_done": "Done",
         "status_cancelled": "Cancelled",
+        "waiting_status": "Waiting",
         "page_title": "Transcription Workspace",
         "page_caption": "Batch videos, choose languages, export text or subtitles.",
         "open_folder": "Open output folder",
@@ -276,12 +279,18 @@ STRINGS = {
     },
 }
 
+STATUS_WAITING = "waiting"
+STATUS_RUNNING = "running"
+STATUS_DONE = "done"
+STATUS_CANCELLED = "cancelled"
+STATUS_FAILED = "failed"
+
 
 @dataclass
 class Job:
     video: Path
     output: Path
-    status: str = "Waiting"
+    status: str = STATUS_WAITING
     mode: str = "whisper"
 
 
@@ -1004,19 +1013,26 @@ class VideoTextWindow(QMainWindow):
         self._refresh_runtime()
 
     def _batch_status_text(self, strings: dict[str, str]) -> str:
-        if self.active_processes:
-            return strings["running_status"]
         statuses = {job.status for job in self.jobs}
-        failed_statuses = {STRINGS["zh"]["failed_status"], STRINGS["en"]["failed_status"]}
-        cancelled_statuses = {STRINGS["zh"]["cancelled_status"], STRINGS["en"]["cancelled_status"]}
-        done_statuses = {STRINGS["zh"]["done_status"], STRINGS["en"]["done_status"]}
-        if statuses and any(status in failed_statuses for status in statuses):
+        if self.active_processes or STATUS_RUNNING in statuses:
+            return strings["running_status"]
+        if STATUS_FAILED in statuses:
             return strings["failed_status"]
-        if statuses and statuses <= cancelled_statuses:
+        if STATUS_CANCELLED in statuses:
             return strings["cancelled_status"]
-        if statuses and statuses <= done_statuses:
+        if statuses and statuses <= {STATUS_DONE}:
             return strings["done_status"]
         return strings["ready_status"]
+
+    def _status_text(self, status: str) -> str:
+        s = STRINGS[self.ui_lang]
+        return {
+            STATUS_WAITING: s["waiting_status"],
+            STATUS_RUNNING: s["running_status"],
+            STATUS_DONE: s["done_status"],
+            STATUS_CANCELLED: s["cancelled_status"],
+            STATUS_FAILED: s["failed_status"],
+        }.get(status, status)
 
     def _refresh_runtime(self) -> None:
         from video_text_extractor import detect_tools, ffmpeg_command
@@ -1172,12 +1188,14 @@ class VideoTextWindow(QMainWindow):
             thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, thumb_item)
             # Data columns
-            values = [job.video.name, file_size(job.video), str(job.output), job.status]
+            values = [job.video.name, file_size(job.video), str(job.output), self._status_text(job.status)]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col in {1, 3}:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, col + 1, item)
+        if hasattr(self, "status_badge"):
+            self.status_badge.setText(self._batch_status_text(STRINGS[self.ui_lang]))
 
     def preview_selected_output(self) -> None:
         rows = sorted({index.row() for index in self.table.selectedIndexes()})
@@ -1193,6 +1211,10 @@ class VideoTextWindow(QMainWindow):
     def command_for(self, job: Job) -> list[str]:
         mode = job.mode
         fmt, _suffix = OUTPUT_FORMATS[self.output_combo.currentText()]
+        if mode == "subtitle":
+            fmt = "srt"
+        elif mode == "ocr":
+            fmt = "text"
         command = [
             python_console_executable(), "-u", str(EXTRACTOR),
             str(job.video),
@@ -1229,7 +1251,7 @@ class VideoTextWindow(QMainWindow):
         self.process_generation += 1
         self._clear_process_queues()
         for job in self.jobs:
-            job.status = "Waiting"
+            job.status = STATUS_WAITING
         self.log.clear()
         self.preview.clear()
         self.progress.setRange(0, 0)
@@ -1250,13 +1272,13 @@ class VideoTextWindow(QMainWindow):
 
     def _next_waiting_index(self) -> int | None:
         for i, job in enumerate(self.jobs):
-            if job.status == "Waiting":
+            if job.status == STATUS_WAITING:
                 return i
         return None
 
     def _start_job(self, index: int) -> None:
         job = self.jobs[index]
-        job.status = "Running"
+        job.status = STATUS_RUNNING
         self.refresh_table()
         self.table.selectRow(index)
         s = STRINGS[self.ui_lang]
@@ -1339,12 +1361,12 @@ class VideoTextWindow(QMainWindow):
         job = self.jobs[index]
         s = STRINGS[self.ui_lang]
         if exit_code == 0:
-            job.status = s["done_status"]
+            job.status = STATUS_DONE
             self.append_log(f"{s['saved'].format(job.output)}\n")
             if job.output.exists():
                 self.preview.setPlainText(job.output.read_text(encoding="utf-8", errors="replace"))
         else:
-            job.status = s["failed_status"]
+            job.status = STATUS_FAILED
             self.append_log(f"{s['failed_code'].format(exit_code)}\n")
         self.refresh_table()
 
@@ -1355,8 +1377,7 @@ class VideoTextWindow(QMainWindow):
     def _job_start_failed(self, index: int, message: str) -> None:
         if index >= len(self.jobs):
             return
-        s = STRINGS[self.ui_lang]
-        self.jobs[index].status = s["failed_status"]
+        self.jobs[index].status = STATUS_FAILED
         self.append_log(f"Process error: {message}\n")
         self.refresh_table()
         self._fill_parallel_slots()
@@ -1365,10 +1386,9 @@ class VideoTextWindow(QMainWindow):
 
     def finish_batch(self) -> None:
         s = STRINGS[self.ui_lang]
-        failed_statuses = {STRINGS["zh"]["failed_status"], STRINGS["en"]["failed_status"]}
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
-        self.status_badge.setText(s["failed_status"] if any(job.status in failed_statuses for job in self.jobs) else s["done_status"])
+        self.status_badge.setText(s["failed_status"] if any(job.status == STATUS_FAILED for job in self.jobs) else self._batch_status_text(s))
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self._set_editing_enabled(True)
@@ -1383,8 +1403,8 @@ class VideoTextWindow(QMainWindow):
         self.process_pump.stop()
         s = STRINGS[self.ui_lang]
         for job in self.jobs:
-            if job.status in {"Waiting", "Running"}:
-                job.status = s["cancelled_status"]
+            if job.status in {STATUS_WAITING, STATUS_RUNNING}:
+                job.status = STATUS_CANCELLED
         self.refresh_table()
         self.finish_batch()
         self.status_badge.setText(s["cancelled_status"])
@@ -1458,7 +1478,7 @@ class VideoTextWindow(QMainWindow):
     # --- Burn subtitles ---
 
     def burn_subtitles(self) -> None:
-        from video_text_extractor import detect_tools, ffmpeg_command
+        from video_text_extractor import detect_tools, ffmpeg_command, local_temp_dir
         s = STRINGS[self.ui_lang]
         status = detect_tools()
         ffmpeg = ffmpeg_command(status)
@@ -1481,16 +1501,19 @@ class VideoTextWindow(QMainWindow):
         video_p = Path(video_path)
         output_path = video_p.parent / f"{video_p.stem}_subtitled.mp4"
 
-        cmd = [
-            ffmpeg, "-y",
-            "-i", video_path,
-            "-vf", f"subtitles='{self._ffmpeg_filter_path(srt_path)}'",
-            "-c:a", "copy",
-            str(output_path),
-        ]
         self.append_log(f"\nBurning subtitles: {video_p.name}\n")
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            with local_temp_dir(output_path.parent, "burn_subtitle_") as temp_dir:
+                temp_srt = temp_dir / "subtitle.srt"
+                shutil.copy2(srt_path, temp_srt)
+                cmd = [
+                    ffmpeg, "-y",
+                    "-i", video_path,
+                    "-vf", f"subtitles='{self._ffmpeg_filter_path(str(temp_srt))}'",
+                    "-c:a", "copy",
+                    str(output_path),
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode == 0:
                 self.append_log(f"{s['burn_done'].format(output_path)}\n")
                 QMessageBox.information(self, s["burn_title"], s["burn_done"].format(output_path))
