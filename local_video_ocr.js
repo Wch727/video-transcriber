@@ -13,74 +13,40 @@ const path = require("path");
 const { pathToFileURL } = require("url");
 const { createRequire } = require("module");
 
-const TESSERACT_LANG_MAP = {
-  zh: "chi_sim",
-  en: "eng",
-  ja: "jpn",
-  ko: "kor",
-  es: "spa",
-  fr: "fra",
-  de: "deu",
-  it: "ita",
-  pt: "por",
-  ru: "rus",
-  ar: "ara",
-  hi: "hin",
-  vi: "vie",
-  th: "tha",
-  tr: "tur",
-  nl: "nld",
-  sv: "swe",
-  pl: "pol",
-  uk: "ukr",
-  id: "ind",
-  ms: "msa",
-  bn: "ben",
-  ur: "urd",
-  fa: "fas",
-  he: "heb",
-  el: "ell",
-  cs: "ces",
-  da: "dan",
-  fi: "fin",
-  hu: "hun",
-  ro: "ron",
-  no: "nor",
-  ca: "cat",
-  la: "lat",
-  sk: "slk",
-  sl: "slv",
-  hr: "hrv",
-  sr: "srp",
-  bg: "bul",
-  lt: "lit",
-  lv: "lav",
-  et: "est",
-  sw: "swa",
-  ml: "mal",
-  ta: "tam",
-  te: "tel",
-  ka: "kat",
-  kk: "kaz",
-  ne: "nep",
-  am: "amh",
-  my: "mya",
-  km: "khm",
-  lo: "lao",
-  mn: "mon",
-  az: "aze",
-  uz: "uzb",
-};
+function loadOcrLanguages() {
+  const jsonPath = path.join(__dirname, "ocr_languages.json");
+  try {
+    const data = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    return {
+      map: data.map || {},
+      aliases: data.aliases || {},
+    };
+  } catch {
+    // Fallback values so the tool still works if the JSON is missing.
+    return {
+      map: {
+        zh: "chi_sim", en: "eng", ja: "jpn", ko: "kor", es: "spa",
+        fr: "fra", de: "deu", it: "ita", pt: "por", ru: "rus",
+        ar: "ara", hi: "hin", vi: "vie", th: "tha", tr: "tur",
+        nl: "nld", sv: "swe", pl: "pol", uk: "ukr", id: "ind",
+        ms: "msa", bn: "ben", ur: "urd", fa: "fas", he: "heb",
+        el: "ell", cs: "ces", da: "dan", fi: "fin", hu: "hun",
+        ro: "ron", no: "nor", ca: "cat", la: "lat", sk: "slk",
+        sl: "slv", hr: "hrv", sr: "srp", bg: "bul", lt: "lit",
+        lv: "lav", et: "est", sw: "swa", ml: "mal", ta: "tam",
+        te: "tel", ka: "kat", kk: "kaz", ne: "nep", am: "amh",
+        my: "mya", km: "khm", lo: "lao", mn: "mon", az: "aze",
+        uz: "uzb",
+      },
+      aliases: {
+        "zh-cn": "chi_sim", "zh-sg": "chi_sim", "zh-hans": "chi_sim",
+        "zh-tw": "chi_tra", "zh-hk": "chi_tra", "zh-mo": "chi_tra", "zh-hant": "chi_tra",
+      },
+    };
+  }
+}
 
-const TESSERACT_LANG_ALIASES = {
-  "zh-cn": "chi_sim",
-  "zh-sg": "chi_sim",
-  "zh-hans": "chi_sim",
-  "zh-tw": "chi_tra",
-  "zh-hk": "chi_tra",
-  "zh-mo": "chi_tra",
-  "zh-hant": "chi_tra",
-};
+const { map: TESSERACT_LANG_MAP, aliases: TESSERACT_LANG_ALIASES } = loadOcrLanguages();
 
 function mapOcrLanguagePart(part) {
   let normalized = part.toLowerCase();

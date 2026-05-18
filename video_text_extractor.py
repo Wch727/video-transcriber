@@ -41,30 +41,39 @@ if sys.platform == "win32":
 
 DEFAULT_MAX_UPLOAD_MB = 24.0
 
-_TESSERACT_LANG_MAP: dict[str, str] = {
-    "zh": "chi_sim", "en": "eng", "ja": "jpn", "ko": "kor", "es": "spa",
-    "fr": "fra", "de": "deu", "it": "ita", "pt": "por", "ru": "rus",
-    "ar": "ara", "hi": "hin", "vi": "vie", "th": "tha", "tr": "tur",
-    "nl": "nld", "sv": "swe", "pl": "pol", "uk": "ukr", "id": "ind",
-    "ms": "msa", "bn": "ben", "ur": "urd", "fa": "fas", "he": "heb",
-    "el": "ell", "cs": "ces", "da": "dan", "fi": "fin", "hu": "hun",
-    "ro": "ron", "no": "nor", "ca": "cat", "la": "lat", "sk": "slk",
-    "sl": "slv", "hr": "hrv", "sr": "srp", "bg": "bul", "lt": "lit",
-    "lv": "lav", "et": "est", "sw": "swa", "ml": "mal", "ta": "tam",
-    "te": "tel", "ka": "kat", "kk": "kaz", "ne": "nep", "am": "amh",
-    "my": "mya", "km": "khm", "lo": "lao", "mn": "mon", "az": "aze",
-    "uz": "uzb",
-}
 
-_TESSERACT_LANG_ALIASES: dict[str, str] = {
-    "zh-cn": "chi_sim",
-    "zh-sg": "chi_sim",
-    "zh-hans": "chi_sim",
-    "zh-tw": "chi_tra",
-    "zh-hk": "chi_tra",
-    "zh-mo": "chi_tra",
-    "zh-hant": "chi_tra",
-}
+def _load_ocr_languages() -> tuple[dict[str, str], dict[str, str]]:
+    """Load shared OCR language maps from ``ocr_languages.json``."""
+    json_path = Path(__file__).resolve().parent / "ocr_languages.json"
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            return data.get("map", {}), data.get("aliases", {})
+        except Exception:
+            pass
+    # Fallback hard-coded values so the tool still works if the JSON is missing.
+    lang_map: dict[str, str] = {
+        "zh": "chi_sim", "en": "eng", "ja": "jpn", "ko": "kor", "es": "spa",
+        "fr": "fra", "de": "deu", "it": "ita", "pt": "por", "ru": "rus",
+        "ar": "ara", "hi": "hin", "vi": "vie", "th": "tha", "tr": "tur",
+        "nl": "nld", "sv": "swe", "pl": "pol", "uk": "ukr", "id": "ind",
+        "ms": "msa", "bn": "ben", "ur": "urd", "fa": "fas", "he": "heb",
+        "el": "ell", "cs": "ces", "da": "dan", "fi": "fin", "hu": "hun",
+        "ro": "ron", "no": "nor", "ca": "cat", "la": "lat", "sk": "slk",
+        "sl": "slv", "hr": "hrv", "sr": "srp", "bg": "bul", "lt": "lit",
+        "lv": "lav", "et": "est", "sw": "swa", "ml": "mal", "ta": "tam",
+        "te": "tel", "ka": "kat", "kk": "kaz", "ne": "nep", "am": "amh",
+        "my": "mya", "km": "khm", "lo": "lao", "mn": "mon", "az": "aze",
+        "uz": "uzb",
+    }
+    aliases: dict[str, str] = {
+        "zh-cn": "chi_sim", "zh-sg": "chi_sim", "zh-hans": "chi_sim",
+        "zh-tw": "chi_tra", "zh-hk": "chi_tra", "zh-mo": "chi_tra", "zh-hant": "chi_tra",
+    }
+    return lang_map, aliases
+
+
+_TESSERACT_LANG_MAP, _TESSERACT_LANG_ALIASES = _load_ocr_languages()
 
 
 def map_ocr_language_part(part: str) -> str:
@@ -162,12 +171,79 @@ def tesseract_data_dirs(status: ToolStatus) -> list[Path]:
     return unique_dirs
 
 
-def tesseract_data_dir_for(language: str, status: ToolStatus) -> Path | None:
-    parts = tesseract_language_parts(language)
-    for data_dir in tesseract_data_dirs(status):
+def _find_tessdata_dir_for_parts(parts: list[str], status: ToolStatus) -> Path | None:
+    """Return a directory that contains all ``parts`` as ``.traineddata`` files.
+
+    Strategy:
+    1. Exact match — single directory that has every required file.
+    2. Combined match — copy missing files from other directories into the best
+       candidate so that all required languages end up in one place.  The
+       combined directory lives under ``.video_text_cache`` and is reused across
+       calls while the process is running.
+    """
+    dirs = tesseract_data_dirs(status)
+    if not parts:
+        return dirs[0] if dirs else None
+
+    # ---- pass 1: exact match ----
+    for data_dir in dirs:
         if data_dir.exists() and all((data_dir / f"{part}.traineddata").exists() for part in parts):
             return data_dir
-    return None
+
+    # ---- pass 2: try to build a combined dir ----
+    if len(parts) == 1:
+        # Only one language — pick the first directory that has it.
+        for data_dir in dirs:
+            if data_dir.exists() and (data_dir / f"{parts[0]}.traineddata").exists():
+                return data_dir
+        return None
+
+    # Find the "best" candidate directory (most languages already present).
+    best_dir: Path | None = None
+    best_hits = -1
+    missing_by_dir: dict[Path, list[str]] = {}
+    for data_dir in dirs:
+        if not data_dir.exists():
+            missing_by_dir[data_dir] = parts
+            continue
+        hits = [p for p in parts if (data_dir / f"{p}.traineddata").exists()]
+        missing = [p for p in parts if p not in hits]
+        missing_by_dir[data_dir] = missing
+        if len(hits) > best_hits:
+            best_hits = len(hits)
+            best_dir = data_dir
+
+    if best_dir is None or best_hits == 0:
+        return None
+
+    missing = missing_by_dir.get(best_dir, [])
+    if not missing:
+        # Shouldn't happen (would have been caught by pass 1), but be safe.
+        return best_dir
+
+    # Copy the missing language files from other directories into the best dir.
+    try:
+        for part in missing:
+            src: Path | None = None
+            for d in dirs:
+                candidate = d / f"{part}.traineddata"
+                if candidate.exists():
+                    src = candidate
+                    break
+            if src is None:
+                # One required language cannot be found anywhere.
+                return None
+            dst = best_dir / f"{part}.traineddata"
+            if not dst.exists():
+                shutil.copy2(src, dst)
+        return best_dir
+    except OSError:
+        return None
+
+
+def tesseract_data_dir_for(language: str, status: ToolStatus) -> Path | None:
+    parts = tesseract_language_parts(language)
+    return _find_tessdata_dir_for_parts(parts, status)
 
 
 def default_ocr_language(status: ToolStatus) -> str:
@@ -286,14 +362,31 @@ def write_text(path: Path, text: str) -> None:
     print(f"已写入: {path}")
 
 
+def _tool_version(exe: str | None, arg: str = "-version") -> str | None:
+    """Return the first line of --version/-version output for *exe*, or None."""
+    if not exe:
+        return None
+    try:
+        result = subprocess.run(
+            [exe, arg], capture_output=True, text=True, timeout=5,
+        )
+        first = (result.stdout or result.stderr or "").splitlines()
+        return first[0].strip() if first else None
+    except Exception:
+        return None
+
+
 def dump_status(video: Path, status: ToolStatus) -> None:
     size_mb = video.stat().st_size / 1024 / 1024
     ffmpeg = status.ffmpeg or imageio_ffmpeg_exe()
     print(f"视频: {video}")
     print(f"大小: {size_mb:.2f} MB")
-    print(f"ffmpeg: {ffmpeg or '未找到'}")
-    print(f"ffprobe: {status.ffprobe or '未找到'}")
-    print(f"tesseract: {status.tesseract or '未找到'}")
+    ffmpeg_ver = _tool_version(ffmpeg)
+    print(f"ffmpeg: {ffmpeg_ver or (ffmpeg or '未找到')}")
+    ffprobe_ver = _tool_version(status.ffprobe)
+    print(f"ffprobe: {ffprobe_ver or (status.ffprobe or '未找到')}")
+    tess_ver = _tool_version(status.tesseract, "--version")
+    print(f"tesseract: {tess_ver or (status.tesseract or '未找到')}")
     print(f"OPENAI_API_KEY: {'已设置' if status.openai_key else '未设置'}")
     print(f"openai-whisper: {'已安装' if status.local_whisper else '未安装'}")
     print(f"imageio-ffmpeg: {'已安装' if status.imageio_ffmpeg else '未安装'}")
@@ -558,6 +651,56 @@ def split_audio_with_ffmpeg(
     return chunks
 
 
+@dataclass
+class _ChunkSegment:
+    """A single transcribed segment with absolute start/end times."""
+
+    start: float
+    end: float
+    text: str
+
+
+def _parse_openai_json_segments(raw: str) -> list[_ChunkSegment]:
+    """Parse the JSON response from OpenAI transcriptions API into segments."""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+    segments: list[_ChunkSegment] = []
+    for seg in payload.get("segments", []):
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        segments.append(
+            _ChunkSegment(
+                start=float(seg.get("start", 0)),
+                end=float(seg.get("end", 0)),
+                text=text,
+            )
+        )
+    return segments
+
+
+def _merge_chunks_into_segments(
+    segments_per_chunk: list[list[_ChunkSegment]],
+    chunk_seconds: int,
+) -> list[_ChunkSegment]:
+    """Shift per-chunk segments to absolute times and flatten."""
+    merged: list[_ChunkSegment] = []
+    for chunk_idx, segs in enumerate(segments_per_chunk):
+        offset = chunk_idx * chunk_seconds
+        for seg in segs:
+            merged.append(
+                _ChunkSegment(
+                    start=seg.start + offset,
+                    end=seg.end + offset,
+                    text=seg.text,
+                )
+            )
+    return merged
+
+
 def transcribe_audio(
     video: Path,
     out: Path,
@@ -582,23 +725,56 @@ def transcribe_audio(
         write_text(out, text)
         return out
 
-    if response_format != "text":
-        fail("大文件自动切片目前只支持 text 输出。请使用 --format text。")
+    # For chunked transcription we always request JSON so we can preserve
+    # per-segment timestamps; the final output is reformatted afterwards.
+    final_format = response_format
+    api_format = "json"
 
     with local_temp_dir(out.parent, "video_text_") as temp_dir:
         chunks = split_audio_with_ffmpeg(video, temp_dir, status, chunk_seconds)
-        parts: list[str] = []
+        segments_per_chunk: list[list[_ChunkSegment]] = []
         for index, chunk in enumerate(chunks, start=1):
             print(f"转写切片 {index}/{len(chunks)}: {chunk.name}")
-            text = transcribe_one_file(
+            raw = transcribe_one_file(
                 chunk,
                 model=model,
                 language=language,
                 prompt=prompt,
-                response_format="text",
+                response_format=api_format,
             )
-            parts.append(text.strip())
-        write_text(out, "\n\n".join(part for part in parts if part))
+            segments_per_chunk.append(_parse_openai_json_segments(raw))
+
+        merged = _merge_chunks_into_segments(segments_per_chunk, chunk_seconds)
+
+        if final_format == "json":
+            payload = {
+                "text": " ".join(s.text for s in merged),
+                "segments": [
+                    {"start": s.start, "end": s.end, "text": s.text} for s in merged
+                ],
+            }
+            write_text(out, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        elif final_format == "srt":
+            blocks: list[str] = []
+            for idx, seg in enumerate(merged, start=1):
+                start = format_subtitle_time(seg.start, comma=True)
+                end = format_subtitle_time(seg.end, comma=True)
+                blocks.append(f"{idx}\n{start} --> {end}\n{seg.text}")
+            write_text(out, "\n\n".join(blocks) + ("\n" if blocks else ""))
+        elif final_format == "vtt":
+            blocks = ["WEBVTT"]
+            for seg in merged:
+                start = format_subtitle_time(seg.start, comma=False)
+                end = format_subtitle_time(seg.end, comma=False)
+                blocks.append(f"{start} --> {end}\n{seg.text}")
+            write_text(out, "\n\n".join(blocks) + "\n")
+        else:
+            lines = [
+                f"[{format_seconds(s.start)} - {format_seconds(s.end)}] {s.text}"
+                for s in merged
+            ]
+            write_text(out, "\n".join(lines) + "\n")
+
     return out
 
 

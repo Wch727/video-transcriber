@@ -389,8 +389,8 @@ class VideoTextWindow(QMainWindow):
 
         self.jobs: list[Job] = []
         self.active_processes: dict[int, subprocess.Popen[str]] = {}
-        self.process_outputs: queue.Queue[tuple[int, int, str]] = queue.Queue()
-        self.process_finishes: queue.Queue[tuple[int, int, int]] = queue.Queue()
+        self.process_outputs: queue.Queue[tuple[int, int, str]] = queue.Queue(maxsize=2000)
+        self.process_finishes: queue.Queue[tuple[int, int, int]] = queue.Queue(maxsize=256)
         self.process_generation = 0
         self.process_pump = QTimer(self)
         self.process_pump.setInterval(80)
@@ -593,6 +593,12 @@ class VideoTextWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_all)
         footer_layout.addWidget(self.cancel_button)
+
+        self.skip_button = QPushButton()
+        self.skip_button.setObjectName("secondaryButton")
+        self.skip_button.setEnabled(False)
+        self.skip_button.clicked.connect(self.skip_current)
+        footer_layout.addWidget(self.skip_button)
 
         self.burn_button = QPushButton()
         self.burn_button.setObjectName("burnButton")
@@ -959,6 +965,15 @@ class VideoTextWindow(QMainWindow):
                     stop:0 #2f81f7, stop:1 #58a6ff);
                 border-radius: 8px;
             }
+            QPushButton#secondaryButton {
+                background: #f6f8fa;
+                color: #24292f;
+                border: 1px solid #d0d7de;
+            }
+            QPushButton#secondaryButton:hover {
+                background: #e8ecf0;
+                border-color: #afb8c1;
+            }
             QRadioButton {
                 spacing: 8px;
             }
@@ -1280,6 +1295,9 @@ class VideoTextWindow(QMainWindow):
         self.status_badge.setText(s["running_status"])
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self.skip_button.setEnabled(True)
+        self.skip_button.setText(s["skip"])
+        self.skip_button.setVisible(True)
         self._set_editing_enabled(False)
         self.refresh_table()
         self._save_history_entry()
@@ -1413,6 +1431,8 @@ class VideoTextWindow(QMainWindow):
         self.status_badge.setText(s["failed_status"] if any(job.status == STATUS_FAILED for job in self.jobs) else self._batch_status_text(s))
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.skip_button.setEnabled(False)
+        self.skip_button.setVisible(False)
         self._set_editing_enabled(True)
 
     def cancel_all(self) -> None:
@@ -1430,6 +1450,33 @@ class VideoTextWindow(QMainWindow):
         self.refresh_table()
         self.finish_batch()
         self.status_badge.setText(s["cancelled_status"])
+
+    def skip_current(self) -> None:
+        """Kill the currently selected running job and advance to the next one."""
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if not rows:
+            return
+        index = rows[0]
+        if index >= len(self.jobs):
+            return
+        job = self.jobs[index]
+        if job.status != STATUS_RUNNING:
+            return
+        # Kill the process if it is still alive.
+        process = self.active_processes.get(index)
+        if process and process.poll() is None:
+            process.kill()
+            del self.active_processes[index]
+        job.status = STATUS_CANCELLED
+        self.process_generation += 1
+        self._clear_process_queues()
+        s = STRINGS[self.ui_lang]
+        self.append_log(f"\nSkipped: {job.video.name}\n")
+        self.refresh_table()
+        # Advance to next waiting job.
+        self._fill_parallel_slots()
+        if not self.active_processes and self._next_waiting_index() is None:
+            self.finish_batch()
 
     def closeEvent(self, event) -> None:
         if self.active_processes:
@@ -1529,8 +1576,31 @@ class VideoTextWindow(QMainWindow):
         if not srt_path:
             return
 
+        @staticmethod
+        def _video_duration_seconds(path: str) -> float:
+            """Return video duration in seconds using ffprobe; fall back to 0 on error."""
+            try:
+                status = detect_tools()
+                ffprobe = status.ffprobe
+                if not ffprobe:
+                    return 0.0
+                result = subprocess.run(
+                    [
+                        ffprobe, "-v", "quiet", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", path,
+                    ],
+                    capture_output=True, text=True, timeout=10,
+                )
+                return float(result.stdout.strip())
+            except Exception:
+                return 0.0
+
         video_p = Path(video_path)
         output_path = video_p.parent / f"{video_p.stem}_subtitled.mp4"
+
+        # Derive a generous timeout: 5× real-time for encoding, minimum 5 min.
+        duration = self._video_duration_seconds(video_path)
+        timeout = max(300, int(duration * 5) + 60) if duration > 0 else 600
 
         self.append_log(f"\nBurning subtitles: {video_p.name}\n")
         try:
@@ -1544,7 +1614,7 @@ class VideoTextWindow(QMainWindow):
                     "-c:a", "copy",
                     str(output_path),
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if result.returncode == 0:
                 self.append_log(f"{s['burn_done'].format(output_path)}\n")
                 QMessageBox.information(self, s["burn_title"], s["burn_done"].format(output_path))
