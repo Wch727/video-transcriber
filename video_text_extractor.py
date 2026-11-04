@@ -4,7 +4,7 @@
 Supported modes:
   audio     Transcribe speech from the video's audio with the OpenAI API.
   whisper   Transcribe speech locally with openai-whisper, no API key required.
-  subtitle  Extract embedded subtitle tracks with ffmpeg; ffprobe is optional.
+  subtitle  Extract embedded subtitle tracks with ffmpeg and ffprobe.
   ocr       OCR visible text from sampled video frames with ffmpeg + tesseract.
   auto      Try embedded subtitles first, then local Whisper, then OpenAI.
 
@@ -366,6 +366,7 @@ def default_output(video: Path, mode: str, output_format: str = "txt") -> Path:
     suffix = {
         "audio": "transcript",
         "whisper": "transcript",
+        "sensevoice": "sensevoice",
         "subtitle": "subtitles",
         "ocr": "ocr",
         "auto": "text",
@@ -429,25 +430,7 @@ def subtitle_streams(video: Path, status: ToolStatus) -> list[dict[str, Any]]:
         data = json.loads(result.stdout or "{}")
         return data.get("streams", [])
 
-    ffmpeg = ffmpeg_command(status)
-    if not ffmpeg:
-        fail("字幕提取需要 ffmpeg 或 ffprobe。")
-
-    result = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", str(video)],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    streams: list[dict[str, Any]] = []
-    for line in result.stderr.splitlines():
-        if "Subtitle:" not in line:
-            continue
-        match = re.search(r"Stream #\d+:\d+(?:\[[^\]]+\])?(?:\(([^)]+)\))?: Subtitle:", line)
-        lang = match.group(1) if match and match.group(1) else str(len(streams))
-        streams.append({"tags": {"language": lang}})
-    return streams
+    fail("检测内嵌字幕需要 ffprobe。请安装包含 ffprobe 的完整 ffmpeg，并加入 PATH。")
 
 
 def subtitle_muxer(output_format: str | None) -> str | None:
@@ -699,7 +682,7 @@ def _parse_openai_verbose_transcript(raw: str) -> _ChunkTranscript:
 
     transcript_text = (payload.get("text") or "").strip()
     segments: list[_ChunkSegment] = []
-    for seg in payload.get("segments", []):
+    for seg in payload.get("segments") or []:
         if not isinstance(seg, dict):
             continue
         segment_text = (seg.get("text") or "").strip()
@@ -777,17 +760,15 @@ def transcribe_audio(
                 response_format=api_format,
             )
             transcript = _parse_openai_verbose_transcript(raw)
+            if final_format in {"srt", "vtt"} and transcript.text and not transcript.segments:
+                fail(f"切片 {index} 返回了正文但没有时间戳，无法生成完整字幕。请改用 TXT 或 JSON。")
             segments_per_chunk.append(transcript.segments)
-            if transcript.text:
-                chunk_texts.append(transcript.text)
+            chunk_texts.append(transcript.text or " ".join(s.text for s in transcript.segments))
 
         merged = _merge_chunks_into_segments(segments_per_chunk, chunk_seconds)
-        if final_format in {"json", "srt", "vtt"} and not merged:
-            fail("OpenAI API 没有返回可合并的时间戳片段，无法生成 json/srt/vtt。")
-
         if final_format == "json":
             payload = {
-                "text": " ".join(s.text for s in merged),
+                "text": "\n\n".join(chunk_texts) or " ".join(s.text for s in merged),
                 "segments": [
                     {"start": s.start, "end": s.end, "text": s.text} for s in merged
                 ],
@@ -812,21 +793,14 @@ def transcribe_audio(
                 f"[{format_seconds(s.start)} - {format_seconds(s.end)}] {s.text}"
                 for s in merged
             ]
-            if lines:
+            if chunk_texts:
+                write_text(out, "\n\n".join(chunk_texts) + "\n")
+            elif lines:
                 write_text(out, "\n".join(lines) + "\n")
             else:
                 write_text(out, "\n\n".join(chunk_texts) + ("\n" if chunk_texts else ""))
 
     return out
-
-
-def ensure_ffmpeg_for_whisper(status: ToolStatus) -> Path | None:
-    if which("ffmpeg"):
-        return None
-    ffmpeg_exe = status.ffmpeg or imageio_ffmpeg_exe()
-    if not ffmpeg_exe:
-        fail("本地 Whisper 需要 ffmpeg。可安装: python -m pip install imageio-ffmpeg")
-    return Path(ffmpeg_exe)
 
 
 def transcribe_with_local_whisper(
@@ -838,53 +812,46 @@ def transcribe_with_local_whisper(
     task: str,
     verbose: bool,
     output_format: str = "text",
+    prompt: str | None = None,
+    audio_channel: str = "mix",
+    enhance_audio: bool = False,
 ) -> Path:
     try:
         import whisper
     except ImportError:
-        fail("未安装本地 Whisper。请先运行: python -m pip install openai-whisper imageio-ffmpeg")
+        fail("未安装本地 Whisper。请运行: python -m pip install openai-whisper imageio-ffmpeg")
+    from transcription_support import decode_audio, save_review
 
     status = detect_tools()
-    ffmpeg_exe = ensure_ffmpeg_for_whisper(status)
-    old_path = os.environ.get("PATH", "")
-    if ffmpeg_exe:
-        shim_name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-        if ffmpeg_exe.name.lower() == shim_name:
-            os.environ["PATH"] = str(ffmpeg_exe.parent) + os.pathsep + old_path
-        else:
-            # Whisper launches a literal "ffmpeg" command. imageio-ffmpeg ships a
-            # versioned executable name, so expose a reusable shim.
-            shim_dir = out.parent / ".video_text_cache"
-            shim_dir.mkdir(parents=True, exist_ok=True)
-            shim = shim_dir / shim_name
-            if not shim.exists() or shim.stat().st_size != ffmpeg_exe.stat().st_size:
-                shutil.copy2(ffmpeg_exe, shim)
-            os.environ["PATH"] = str(shim.parent) + os.pathsep + old_path
-
-    print(f"加载本地 Whisper 模型: {model_name}")
-    print("第一次运行会下载模型；下载完成后可离线复用。")
-    try:
-        model = whisper.load_model(model_name)
-        try:
-            import torch
-            use_fp16 = torch.cuda.is_available()
-            if use_fp16:
-                print("检测到 CUDA GPU，启用 fp16 加速。")
-        except ImportError:
-            use_fp16 = False
-        result = model.transcribe(
-            str(video),
-            language=language,
-            task=task,
-            fp16=use_fp16,
-            verbose=verbose,
-        )
-    finally:
-        if ffmpeg_exe:
-            os.environ["PATH"] = old_path
-
-    text = format_whisper_result(result, output_format)
-    write_text(out, text)
+    ffmpeg = ffmpeg_command(status)
+    if not ffmpeg:
+        fail("需要 ffmpeg 来读取音频。请安装 imageio-ffmpeg 或完整 ffmpeg。")
+    print("[stage:decode]", flush=True)
+    audio = decode_audio(video, ffmpeg, audio_channel, enhance_audio)
+    print("[stage:model]", flush=True)
+    print(f"加载 Whisper 模型: {model_name}；未缓存的模型首次使用需要下载。", flush=True)
+    from model_storage import model_directory
+    cache_dir = model_directory("whisper")
+    model = whisper.load_model(model_name, download_root=str(cache_dir))
+    print("[stage:transcribe]", flush=True)
+    result = model.transcribe(
+        audio,
+        language=language,
+        task=task,
+        fp16=status.cuda_gpu,
+        verbose=verbose,
+        initial_prompt=prompt or None,
+        condition_on_previous_text=False,
+        temperature=(0.0, 0.2, 0.4),
+        beam_size=5,
+        no_speech_threshold=0.6,
+        logprob_threshold=-1.0,
+        compression_ratio_threshold=2.4,
+    )
+    print("[stage:export]", flush=True)
+    write_text(out, format_whisper_result(result, output_format))
+    save_review(out, video, result, model=model_name, channel=audio_channel,
+                enhance=enhance_audio, prompt=prompt or "", task=task)
     return out
 
 
@@ -1065,6 +1032,9 @@ def run_auto(video: Path, out: Path, status: ToolStatus, args: argparse.Namespac
                 task=args.whisper_task,
                 verbose=args.verbose,
                 output_format=args.format,
+                prompt=args.prompt,
+                audio_channel=args.audio_channel,
+                enhance_audio=args.enhance_audio,
             )
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as exc:
             print(f"本地 Whisper 转写失败，改用 OpenAI API: {exc}")
@@ -1087,9 +1057,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("video", type=Path, help="输入视频文件，例如 4-1.mp4")
     parser.add_argument(
         "--mode",
-        choices=["auto", "audio", "whisper", "subtitle", "ocr"],
-        default="whisper",
-        help="提取模式。whisper=本地语音转文字，audio=OpenAI API，subtitle=内嵌字幕，ocr=画面文字。",
+        choices=["auto", "audio", "whisper", "sensevoice", "subtitle", "ocr"],
+        default="sensevoice",
+        help="默认 sensevoice=本地中文转写；whisper=多语言语音转写，audio=OpenAI API，subtitle=内嵌字幕，ocr=画面文字。",
     )
     parser.add_argument("-o", "--out", type=Path, help="输出文件路径。默认根据视频名生成。")
     parser.add_argument(
@@ -1116,6 +1086,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="显示本地 Whisper 的详细转写进度。",
     )
     parser.add_argument("--language", help="语音语言代码，例如 zh/en。OCR 模式会从已安装语言包中选择默认值。")
+    parser.add_argument("--audio-channel", choices=["mix", "left", "right"], default="mix", help="音频声道")
+    parser.add_argument("--enhance-audio", action="store_true", help="轻度降噪并平衡人声音量")
     parser.add_argument("--prompt", help="给转写模型的提示词，例如专有名词、课程主题等。")
     parser.add_argument(
         "--max-upload-mb",
@@ -1166,9 +1138,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "ocr":
         output_format = "txt"
     out = ensure_output_file(args.out or default_output(video, args.mode, output_format))
+    if out.resolve() == video.resolve():
+        fail("输出路径不能与输入音视频相同。")
 
     try:
-        if args.mode == "subtitle":
+        if args.mode == "sensevoice":
+            if args.format != "text":
+                fail("SenseVoice 校对模式目前只输出 TXT；时间戳是约 20 秒的音频区间。")
+            if args.language and args.language != "zh":
+                fail("SenseVoice 交叉校对模式目前固定识别中文。")
+            if args.prompt or args.enhance_audio:
+                fail("SenseVoice 校对模式不使用术语提示或降噪，请移除 --prompt / --enhance-audio。")
+            from sensevoice_backend import transcribe
+            try:
+                transcribe(video, out, args.audio_channel)
+            except RuntimeError as exc:
+                fail(str(exc))
+        elif args.mode == "subtitle":
             extract_subtitles_as(video, out, status, args.format)
         elif args.mode == "ocr":
             ocr_language = map_ocr_language(args.language) if args.language else default_ocr_language(status)
@@ -1182,6 +1168,9 @@ def main(argv: list[str] | None = None) -> int:
                 task=args.whisper_task,
                 verbose=args.verbose,
                 output_format=args.format,
+                prompt=args.prompt,
+                audio_channel=args.audio_channel,
+                enhance_audio=args.enhance_audio,
             )
         elif args.mode == "auto":
             run_auto(video, out, status, args)

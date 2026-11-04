@@ -6,9 +6,9 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows-0078D4)
 ![License](https://img.shields.io/badge/License-MIT-2EA043)
 
-把视频里的语音、字幕轨或画面文字提取成可编辑文本。
+把音视频里的语音、字幕轨或画面文字提取成可编辑文本。
 
-默认走本地 Whisper，不需要 API Key；也可以切换到 OpenAI API、内嵌字幕提取、画面 OCR，或者直接导出 SRT/VTT 字幕。
+默认使用本地 SenseVoice 转写中文录音，不需要 API Key。其他语言或句子级 SRT/VTT 字幕可切换到 Whisper；也保留 OpenAI API、内嵌字幕提取和画面 OCR。
 
 > 适合课程视频、会议录屏、英文视频转英文稿、字幕文件制作、以及把屏幕里的字幕/幻灯片文字提取出来。
 
@@ -16,9 +16,9 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| 桌面软件体验 | PySide6 图形界面，双击启动，拖拽视频，队列批量处理 |
-| 本地优先 | 本地 Whisper 转写，视频不离开电脑，模型下载后可复用 |
-| 5 种模式 | Local Whisper、OpenAI API、Embedded Subtitles、Visual OCR、Auto |
+| 桌面软件体验 | PySide6 浅色工作台，双击启动，拖拽音视频，队列批量处理 |
+| 本地优先 | 默认 SenseVoice 中文转写，录音不离开电脑，模型下载后可复用 |
+| 6 种模式 | SenseVoice、Whisper、OpenAI API、Embedded Subtitles、Visual OCR、Auto |
 | 多语言 | 支持自动识别，也可指定 `en`、`zh`、`ja`、`ko`、`es`、`fr` 等语言 |
 | 多格式输出 | `TXT`、`SRT`、`VTT`、`JSON` |
 | 批量和历史 | 支持 1-4 个任务并行、实时日志、输出预览、历史记录恢复 |
@@ -30,6 +30,7 @@
 
 ```powershell
 python -m pip install -r requirements.txt
+python tools/setup_sensevoice.py
 ```
 
 启动桌面版：
@@ -44,9 +45,19 @@ python video_text_gui.py
 start_video_text_gui.bat
 ```
 
-最常见场景：英语视频转英语文字。
+中文录音：保持默认 SenseVoice 模式，添加音视频后直接开始，结果为 TXT 待校对稿。模型首次配置约下载 239MB。
 
-1. 模式选 `Local Whisper`
+需要把模型放到 D 盘时，首次配置可改为：
+
+```powershell
+python tools/setup_sensevoice.py --model-dir D:/VideoTextModels
+```
+
+这个选择会保存在本机，下次双击启动仍然使用该目录。
+
+英语视频转英语文字：
+
+1. 模式选 `本地语音转写 / Local transcription`（Whisper）
 2. 语言选 `English (en)`
 3. 任务选 `Transcribe`
 4. 输出选 `TXT` 或 `SRT`
@@ -56,28 +67,72 @@ start_video_text_gui.bat
 
 桌面版是推荐入口。它会帮你处理文件队列、输出路径、模型参数和运行日志，适合不想每次敲命令的人。
 
+![桌面转写工作台](assets/desktop-ui.png)
+
+左侧集中设置语言、模型、输出格式与声道；文件类型、输出目录、翻译任务、并行数和运行环境放在高级设置里。正文上方可播放原始音频、拖动定位和调速（0.5–2 倍），双击带时间戳的行可跳到对应位置。日志和历史默认收起，可由右下角按钮展开。
+
+支持直接添加 M4A、MP3、WAV、FLAC、AAC、OGG、OPUS、WMA 音频。切换文件会保留未保存的编辑草稿，点击保存才写入当前文件。草稿只在本次运行中保留。
+
+不同目录的同名文件会分配不同的输出文件名。重复转写时，如果输出已存在，会新增编号文件，保留上一版。字幕烧录在后台运行，可取消；输出已存在时也自动使用新文件名。
+
+### 模糊录音与校对
+
+本地转写可选混合、左、右声道；轻度人声增强默认关闭，适合与原音版本对比。专业术语会作为本地或云端模型的提示，建议只填写录音中确实出现的词。
+
+桌面版和命令行默认选择 SenseVoice；切换到 Whisper 时，初始模型为 small，未缓存时约下载 461MB。本地解码直接使用 ffmpeg，不再复制一个 ffmpeg.exe 到输出目录。
+
+模型目录由本机 `.model_storage.json` 的 `directory` 统一指定，也可使用 `VIDEO_TEXT_MODEL_DIR` 环境变量覆盖。Whisper 放在其 `whisper/` 子目录，SenseVoice 放在 `sensevoice/`。未配置时使用项目 `.video_text_cache/`；配置文件不会提交到 Git。高级设置里可查看当前模型目录。使用 `--model-dir D:/VideoTextModels` 配置后，两个引擎的后续下载和加载都会使用 D 盘。
+
+本地转写优先使用确定性解码；遇到异常重复或低可信结果时使用有限的温度回退重试，保留正常静音阈值，并关闭跨片段文本续接。每份输出旁会生成 `.review.json`，记录模型提示需要回听的片段；点击“待核对”可定位播放。这些提示不是准确率评分，未标记内容仍可能识别有误。增强、术语提示可能改善或恶化结果，应与原音版本比较。
+
+导出无时间戳副本会另存为 `*_reading.txt`，保留原词句，不生成或补写答辩内容；原始转写不受影响。
+
+### 中文交叉校对
+
+默认模式“中文交叉校对 · SenseVoice”使用独立的本地识别引擎，也可与 Whisper 互相核对。它目前固定中文、输出 TXT，每段时间戳表示约 20 秒的音频区间，不是句子级对齐。所有片段都会标为待人工核对；没有识别出文字的区间会明确保留占位，不会悄悄消失。
+
+完整依赖安装已包含 SenseVoice。也可选择只将该引擎的依赖装到项目缓存：
+
+```powershell
+python -m pip install --upgrade --target .video_text_cache/asr-deps -r requirements-sensevoice.txt
+python tools/setup_sensevoice.py
+```
+
+下载约 239MB 模型并校验哈希；识别时无需上传录音。实现依据：[Sherpa-ONNX SenseVoice 文档](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html)。
+
 ### 操作流程
 
-1. 添加视频：点击添加按钮，或者把 `.mp4` / `.mkv` / `.mov` / `.wmv` / `.flv` 等视频拖进窗口。
-2. 选择模式：本地 Whisper、OpenAI API、内嵌字幕、画面 OCR 或 Auto。
-3. 选择语言：不确定就选 Auto detect，明确语言就指定代码，例如 `en`、`zh`。
-4. 选择模型：`tiny` 快，`base` 均衡，`small` / `medium` 更准但更慢。
-5. 选择输出：TXT 用于阅读，SRT/VTT 用于字幕，JSON 用于后续处理。
+1. 添加文件：点击添加音视频，或者把 `.m4a` / `.mp3` / `.wav` / `.mp4` / `.mkv` 等文件拖进窗口。
+2. 选择模式：中文保持默认 SenseVoice；多语言或字幕可选 Whisper，另外保留云端、内嵌字幕、OCR 和 Auto。
+3. 选择语言：SenseVoice 固定中文；Whisper 可自动识别或指定 `en`、`zh` 等。
+4. 选择模型：SenseVoice 使用固定 INT8 模型；Whisper 可选择 small 等模型。准确率取决于语言和录音质量。
+5. 选择输出：SenseVoice 固定 TXT；Whisper 支持 TXT、SRT、VTT、JSON。
 6. 开始队列：运行中界面会锁住关键设置，避免任务和输出路径错乱。
+
+### 回归验证
+
+`python -m unittest discover -s tests -v` 验证音频支持、输出命名、预览草稿、跳过任务、真实并行子进程队列、字幕烧录及切片返回缺时间戳等边界情况。真实字幕烧录测试使用本地 ffmpeg，不调用转写 API，也不下载 Whisper 模型。
 
 ### 模式怎么选
 
 | 模式 | 适合场景 | 额外依赖 |
 | --- | --- | --- |
-| `Local Whisper` | 视频有语音，要转成文字；默认推荐 | `openai-whisper`、`imageio-ffmpeg` |
+| `SenseVoice` | 中文录音转 TXT，默认模式；区间时间戳供人工回听 | `sherpa-onnx`、SenseVoice 模型、ffmpeg |
+| `Local Whisper` | 多语言转写、翻译成英文、SRT/VTT/JSON | `openai-whisper`、`imageio-ffmpeg` |
 | `OpenAI API` | 想用远程 API 转写 | `OPENAI_API_KEY` |
-| `Embedded subtitles` | 视频文件本身带字幕轨 | `ffmpeg`，`ffprobe` 推荐但不是硬依赖 |
+| `Embedded subtitles` | 视频文件本身带字幕轨 | `ffmpeg` 和 `ffprobe` |
 | `Visual OCR` | 字幕或文字是画面的一部分，可在界面里指定 OCR 语言 | `tesseract` 和对应语言包 |
 | `Auto (best)` | 先试字幕轨，再回退到语音转写 | 取决于命中的模式 |
 
 ## Command Line
 
 GUI 之外，所有核心能力也能用命令行调用。
+
+中文转写（默认 SenseVoice）：
+
+```powershell
+python video_text_extractor.py recording.m4a --audio-channel left -o transcript.txt
+```
 
 本地 Whisper 转写：
 

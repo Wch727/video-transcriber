@@ -2,3 +2,4 @@ PySide6
 openai-whisper
 imageio-ffmpeg
 openai
+sherpa-onnx==2.0.1

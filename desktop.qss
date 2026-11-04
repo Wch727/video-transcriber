@@ -1,0 +1,66 @@
+QWidget {
+    font-family: "Microsoft YaHei UI";
+    font-size: 13px;
+    color: #25332f;
+}
+QMainWindow, #content { background: #ffffff; }
+#sidebar { background: #f3f6f6; border-right: 1px solid #dce5e1; }
+#appTitle { font-size: 22px; font-weight: 700; color: #153d35; }
+#appSubtitle, #pageCaption, #modelHint { color: #697b75; }
+#pageTitle { font-size: 23px; font-weight: 700; }
+#sectionTitle { font-size: 14px; font-weight: 650; }
+#statusBadge { color: #1b7160; padding: 8px 0; font-weight: 650; }
+QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
+QGroupBox { border: none; margin-top: 12px; padding-top: 16px; font-weight: 650; }
+QGroupBox::title { subcontrol-origin: margin; left: 0; }
+QLineEdit, QComboBox, QSpinBox {
+    min-height: 22px; padding: 6px; border: 1px solid #cedbd5;
+    border-radius: 5px; background: #ffffff;
+    selection-background-color: #cdebe2;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus { border-color: #258671; }
+QComboBox { padding-right: 24px; }
+QComboBox::drop-down { width: 22px; border: none; }
+QComboBox QAbstractItemView { background: white; selection-background-color: #d9efe7; }
+QPushButton, QToolButton {
+    min-height: 20px; padding: 7px 11px;
+    background: #ffffff; border: 1px solid #cedbd5; border-radius: 5px;
+}
+QPushButton:hover, QToolButton:hover { background: #eaf3ef; border-color: #8cb8a9; }
+QPushButton:pressed { background: #d3e9df; }
+QPushButton:disabled { color: #9daaa5; background: #f4f6f5; border-color: #e2e8e5; }
+QPushButton#primaryButton { background: #197661; color: white; border-color: #197661; font-weight: 650; }
+QPushButton#primaryButton:hover { background: #125e4d; }
+QPushButton#primaryButton:disabled { background: #a4c6bb; border-color: #a4c6bb; }
+QTableWidget { background: white; border: 1px solid #dce5e1; border-radius: 5px; }
+QTableWidget::item { padding: 6px; border-bottom: 1px solid #edf1ef; }
+QTableWidget::item:selected { background: #e2f1eb; color: #153d35; }
+QHeaderView::section {
+    background: #f5f8f6; color: #697b75; padding: 8px; border: none;
+    border-bottom: 1px solid #dce5e1; font-weight: 600;
+}
+QPlainTextEdit { background: #fafcfb; border: 1px solid #dce5e1; border-radius: 5px; padding: 12px; selection-background-color: #cdebe2; }
+QPlainTextEdit#transcriptEditor { font-size: 16px; background: white; padding: 20px; }
+QListWidget { background: white; border: 1px solid #dce5e1; border-radius: 5px; padding: 4px; }
+QListWidget::item { padding: 5px; }
+QListWidget::item:selected { background: #e2f1eb; color: #153d35; }
+QListWidget#runtimeList { background: transparent; border: none; font-size: 12px; }
+QListWidget#runtimeList::item { padding: 3px 0; }
+QTabWidget::pane { border: none; }
+QTabBar::tab { color: #697b75; padding: 8px 18px; border-bottom: 2px solid transparent; }
+QTabBar::tab:selected { color: #197661; border-bottom-color: #197661; }
+QProgressBar { background: #edf3ef; border: none; border-radius: 4px; min-height: 8px; max-height: 8px; color: transparent; }
+QProgressBar::chunk { background: #278571; border-radius: 4px; }
+QSplitter::handle { background: #edf1ef; height: 5px; margin: 5px 0; }
+QRadioButton { spacing: 6px; }
+QScrollBar:vertical { background: transparent; width: 8px; }
+QScrollBar::handle:vertical { background: #bbcfc5; border-radius: 4px; min-height: 24px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+#audioPlayer { background: #edf5f2; border-radius: 6px; }
+#audioFilename { font-size: 12px; font-weight: 600; color: #45675c; }
+#audioError { color: #a44036; font-size: 12px; }
+#reviewList { background: #fff9e9; color: #795d23; border: 1px solid #e7d5a5; }
+QSlider::groove:horizontal { height: 4px; background: #cbded4; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: #278571; border-radius: 2px; }
+QSlider::handle:horizontal { background: #197661; border: 2px solid white; width: 12px; height: 12px; margin: -5px 0; border-radius: 7px; }
+QCheckBox { spacing: 7px; padding: 4px 0; }
