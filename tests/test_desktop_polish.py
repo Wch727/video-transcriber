@@ -267,6 +267,23 @@ class PlaybackPolishTests(unittest.TestCase):
         self.assertEqual(signal.count(), 1)
         editor.close()
 
+    def test_double_click_body_selects_word_without_seeking(self):
+        editor = TranscriptEdit()
+        self.addCleanup(editor.close)
+        editor.resize(600, 150)
+        editor.setPlainText("[00:00:02 - 00:00:04] body words")
+        editor.show()
+        self.app.processEvents()
+        signal = QSignalSpy(editor.seekRequested)
+        cursor = editor.textCursor()
+        cursor.setPosition(editor.toPlainText().index("words") + 2)
+        point = editor.cursorRect(cursor).center()
+        QTest.mouseClick(editor.viewport(), Qt.LeftButton, pos=point)
+        QTest.mouseDClick(editor.viewport(), Qt.LeftButton, pos=point)
+        QTest.mouseRelease(editor.viewport(), Qt.LeftButton, pos=point)
+        self.assertEqual(signal.count(), 0)
+        self.assertEqual(editor.textCursor().selectedText(), "words")
+
 
 if __name__ == "__main__":
     unittest.main()

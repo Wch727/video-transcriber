@@ -56,13 +56,6 @@ class TranscriptEdit(QPlainTextEdit):
             if position is not None:
                 self.seekRequested.emit(position)
 
-    def mouseDoubleClickEvent(self, event):
-        super().mouseDoubleClickEvent(event)
-        position = timestamp_ms(self.textCursor().block().text())
-        if position is not None:
-            self.seekRequested.emit(position)
-
-
 class TimestampHighlighter(QSyntaxHighlighter):
     def highlightBlock(self, text):
         match = re.match(r"\s*(?:\[\d{2,}:\d{2}:\d{2}[^\]]*\]|\d{2,}:\d{2}:\d{2}.*?-->.*)", text)

@@ -89,6 +89,68 @@ class ActualChunkTimingTests(unittest.TestCase):
 
 
 class ReviewSaveTests(unittest.TestCase):
+    def test_subtitles_without_sidecar_reject_bad_timing_without_overwrite(self):
+        cases = {
+            ".srt": ["1\nbroken --> 00:00:04,000\nwords\n",
+                     "1\n00:00:65,000 --> 00:01:10,000\nwords\n",
+                     "1\n00:00:04,000 --> 00:00:02,000\nwords\n"],
+            ".vtt": ["00:00:02.000 --> 00:00:04.000\nwords\n",
+                     "WEBVTT\n\nbroken --> 00:00:04.000\nwords\n"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix, edits in cases.items():
+                output = Path(directory) / ("out" + suffix)
+                original = b"original file\r\n"
+                output.write_bytes(original)
+                for text in edits:
+                    with self.subTest(suffix=suffix, text=text):
+                        with self.assertRaises(ValueError):
+                            support.save_edited_transcript(output, text)
+                        self.assertEqual(output.read_bytes(), original)
+                        self.assertFalse(support.review_path(output).exists())
+
+    def test_json_without_sidecar_rejects_invalid_structure_and_timing(self):
+        invalid = ["{", "[]", "{}", '{"text": 123}',
+                   '{"text":"words","segments":null}',
+                   json.dumps({"text": "different", "segments": [{"start": 0, "end": 1, "text": "words"}]}),
+                   json.dumps({"segments": [{"start": 4, "end": 2, "text": "words"}]})]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out.json"
+            original = b'{"text":"original"}\r\n'
+            output.write_bytes(original)
+            for text in invalid:
+                with self.subTest(text=text):
+                    with self.assertRaises(ValueError):
+                        support.save_edited_transcript(output, text)
+                    self.assertEqual(output.read_bytes(), original)
+
+    def test_valid_structured_edits_without_sidecar_remain_supported(self):
+        cases = [
+            (".srt", "1\n00:00:02,000 --> 00:00:04,000\ncorrected\n"),
+            (".vtt", "WEBVTT\n\n00:00:02.000 --> 00:00:04.000\ncorrected\n"),
+            (".json", '{"text":"corrected"}'),
+            (".json", '{"text":"corrected","segments":[]}'),
+            (".json", '{"text":""}'),
+            (".json", '{"segments":[]}'),
+            (".json", json.dumps({"text": "corrected", "segments": [{"start": 2, "end": 4, "text": "corrected"}]})),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix, text in cases:
+                with self.subTest(suffix=suffix, text=text):
+                    output = Path(directory) / ("out" + suffix)
+                    output.write_text("original", encoding="utf-8")
+                    support.save_edited_transcript(output, text)
+                    self.assertEqual(output.read_text(encoding="utf-8"), text)
+                    self.assertFalse(support.review_path(output).exists())
+
+    def test_plain_txt_without_sidecar_remains_freely_editable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out.txt"
+            output.write_text("original", encoding="utf-8")
+            text = "free text\n[not a timestamp] words --> more words\n"
+            support.save_edited_transcript(output, text)
+            self.assertEqual(output.read_text(encoding="utf-8"), text)
+
     def test_stale_sidecar_cannot_be_revalidated_by_saving(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "out.txt"

@@ -202,6 +202,17 @@ def parse_transcript_segments(text: str, suffix: str) -> list[dict]:
 
 def save_edited_transcript(output: Path, text: str) -> None:
     """Stage both documents; roll back metadata if replacing the transcript fails."""
+    suffix = output.suffix.lower()
+    if suffix in {".srt", ".vtt"}:
+        parse_transcript_segments(text, suffix)
+    elif suffix == ".json":
+        payload = json.loads(text)
+        if not isinstance(payload, dict):
+            raise ValueError("Expected a transcript JSON object")
+        # Cloud results may contain text without any timestamped segments.
+        text_only = isinstance(payload.get("text"), str) and ("segments" not in payload or payload["segments"] == [])
+        if not text_only:
+            parse_transcript_segments(text, suffix)
     sidecar = review_path(output)
     with tempfile.TemporaryDirectory(prefix=".transcript-save-", dir=output.parent) as directory:
         staging = Path(directory)
@@ -214,7 +225,6 @@ def save_edited_transcript(output: Path, text: str) -> None:
                 raise ValueError("Invalid review file; transcript was not saved")
             if not review_matches_text(data, output.read_text(encoding="utf-8")):
                 raise ValueError("Review data is out of date; restore the matching transcript or transcribe again before saving.")
-            suffix = output.suffix.lower()
             def timing_key(segment):
                 values = (float(segment["start"]), float(segment["end"]))
                 if suffix == ".txt":
