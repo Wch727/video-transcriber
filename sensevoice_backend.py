@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from contextlib import closing
 import sys
 from pathlib import Path
 
@@ -28,31 +29,36 @@ def load_recognizer():
 
 
 def transcribe(source: Path, output: Path, channel="left"):
-    from transcription_support import decode_audio, save_review
+    from transcription_support import audio_duration, iter_audio_chunks, save_review
     from video_text_extractor import detect_tools, ffmpeg_command, format_whisper_result, write_text
 
     print("[stage:model]", flush=True)
     recognizer = load_recognizer()
     print("[stage:decode]", flush=True)
-    binary = ffmpeg_command(detect_tools())
+    status = detect_tools()
+    binary = ffmpeg_command(status)
     if not binary:
         raise RuntimeError("ffmpeg is required")
-    audio = decode_audio(source, binary, channel)
+    duration = audio_duration(source, status.ffprobe)
     print("[stage:transcribe]", flush=True)
     segments = []
-    window = 20 * 16000
     import numpy as np
-    for start in range(0, len(audio), window):
-        chunk = audio[start:start + window]
-        gain = min(8.0, 0.95 / max(float(np.max(np.abs(chunk))), 1e-6))
-        stream = recognizer.create_stream()
-        stream.accept_waveform(16000, chunk * gain)
-        recognizer.decode_stream(stream)
-        text = stream.result.text.strip()
-        segments.append({"start": start / 16000, "end": (start + len(chunk)) / 16000,
-                         "text": text or "[未识别出文字]",
-                         "review_reasons": ["manual_review"]})
-        print(f"{min(100, round((start + len(chunk)) / len(audio) * 100))}%| {start + len(chunk)}/{len(audio)}", flush=True)
+    with closing(iter_audio_chunks(source, binary, channel, chunk_seconds=20)) as chunks:
+        for start, chunk in chunks:
+            gain = min(8.0, 0.95 / max(float(np.max(np.abs(chunk))), 1e-6))
+            stream = recognizer.create_stream()
+            stream.accept_waveform(16000, chunk * gain)
+            recognizer.decode_stream(stream)
+            text = stream.result.text.strip()
+            end = start + len(chunk) / 16000
+            segments.append({"start": start, "end": end,
+                             "text": text or "[未识别出文字]",
+                             "review_reasons": ["manual_review"]})
+            print(f"已处理音频至 {end:.2f} 秒", flush=True)
+            if duration:
+                print(f"{min(99, round(end / duration * 100))}%| {end:.2f}/{duration:.2f}", flush=True)
+    if duration:
+        print("100%| recognition complete", flush=True)
     result = {"text": "\n".join(s["text"] for s in segments), "language": "zh", "segments": segments}
     print("[stage:export]", flush=True)
     write_text(output, format_whisper_result(result, "text"))

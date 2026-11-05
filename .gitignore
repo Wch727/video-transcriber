@@ -24,6 +24,10 @@ outputs/
 *_ocr*.txt
 *.log
 .transcribe_history.json
+.transcribe_settings.json
+.transcribe_drafts/
+*_recovered_*.txt
+*_recovered_*.json
 .model_storage.json
 .claude/settings.local.json
 *.m4a

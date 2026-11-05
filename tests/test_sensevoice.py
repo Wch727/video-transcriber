@@ -1,4 +1,6 @@
 import tempfile
+from contextlib import redirect_stdout
+import io
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -8,6 +10,7 @@ import numpy as np
 import sensevoice_backend
 from transcription_support import review_path
 from video_text_extractor import build_parser
+from video_text_extractor import ToolStatus
 
 
 class SenseVoiceTests(unittest.TestCase):
@@ -26,8 +29,11 @@ class SenseVoiceTests(unittest.TestCase):
         audio = np.zeros(21 * 16000, dtype=np.float32)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "out.txt"
-            with patch.object(sensevoice_backend, "load_recognizer", return_value=recognizer), patch("transcription_support.decode_audio", return_value=audio), patch("video_text_extractor.detect_tools"), patch("video_text_extractor.ffmpeg_command", return_value="ffmpeg"):
+            log = io.StringIO()
+            with patch.object(sensevoice_backend, "load_recognizer", return_value=recognizer), patch("transcription_support.iter_audio_chunks", return_value=((start / 16000, audio[start:start + 20 * 16000]) for start in range(0, len(audio), 20 * 16000))), patch("video_text_extractor.detect_tools", return_value=ToolStatus("ffmpeg", None, None, False, False, False, False)), patch("transcription_support.audio_duration", return_value=21), redirect_stdout(log):
                 result = sensevoice_backend.transcribe(Path("input.wav"), output)
+            self.assertIn("95%|", log.getvalue())
+            self.assertIn("100%|", log.getvalue())
             self.assertEqual(len(result["segments"]), 2)
             self.assertEqual(result["segments"][0]["start"], 0)
             self.assertEqual(result["segments"][0]["end"], 20)

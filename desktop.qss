@@ -1,13 +1,13 @@
 QWidget {
     font-family: "Microsoft YaHei UI";
     font-size: 13px;
-    color: #25332f;
+    color: #2d383c;
 }
 QMainWindow, #content { background: #ffffff; }
-#sidebar { background: #f3f6f6; border-right: 1px solid #dce5e1; }
+#sidebar { background: #f4f6f7; border-right: 1px solid #dfe5e7; }
 #appTitle { font-size: 22px; font-weight: 700; color: #153d35; }
 #appSubtitle, #pageCaption, #modelHint { color: #697b75; }
-#pageTitle { font-size: 23px; font-weight: 700; }
+#pageTitle { font-size: 21px; font-weight: 700; }
 #sectionTitle { font-size: 14px; font-weight: 650; }
 #statusBadge { color: #1b7160; padding: 8px 0; font-weight: 650; }
 QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
@@ -40,7 +40,12 @@ QHeaderView::section {
     border-bottom: 1px solid #dce5e1; font-weight: 600;
 }
 QPlainTextEdit { background: #fafcfb; border: 1px solid #dce5e1; border-radius: 5px; padding: 12px; selection-background-color: #cdebe2; }
-QPlainTextEdit#transcriptEditor { font-size: 16px; background: white; padding: 20px; }
+QPlainTextEdit#transcriptEditor, QPlainTextEdit#readingView { font-size: 15px; background: white; padding: 16px; }
+QPlainTextEdit#readingView { background: #fcfcfd; padding: 20px; }
+#findBar { background: #f5f7f8; border: 1px solid #dfe5e7; border-radius: 5px; }
+QPushButton#iconButton, QToolButton#iconButton { padding: 4px; min-height: 18px; }
+QPushButton#iconButton:focus, QToolButton#iconButton:focus { border-color: #258671; }
+#viewTabs::tab { padding: 7px 12px; }
 QListWidget { background: white; border: 1px solid #dce5e1; border-radius: 5px; padding: 4px; }
 QListWidget::item { padding: 5px; }
 QListWidget::item:selected { background: #e2f1eb; color: #153d35; }
@@ -59,7 +64,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 #audioPlayer { background: #edf5f2; border-radius: 6px; }
 #audioFilename { font-size: 12px; font-weight: 600; color: #45675c; }
 #audioError { color: #a44036; font-size: 12px; }
-#reviewList { background: #fff9e9; color: #795d23; border: 1px solid #e7d5a5; }
+#reviewList { background: #fffcf4; color: #795d23; border: 1px solid #e7d5a5; }
+#reviewList::item { padding: 7px 8px; }
+QStatusBar { color: #536268; font-size: 12px; background: #f5f7f8; }
 QSlider::groove:horizontal { height: 4px; background: #cbded4; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: #278571; border-radius: 2px; }
 QSlider::handle:horizontal { background: #197661; border: 2px solid white; width: 12px; height: 12px; margin: -5px 0; border-radius: 7px; }

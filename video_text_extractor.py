@@ -18,8 +18,10 @@ Examples:
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -615,40 +617,65 @@ def transcribe_one_file(
     return api_response_to_text(response, response_format)
 
 
+@dataclass(frozen=True)
+class AudioChunk:
+    path: Path
+    start: float
+
+
 def split_audio_with_ffmpeg(
     video: Path,
     workdir: Path,
     status: ToolStatus,
     chunk_seconds: int,
-) -> list[Path]:
+) -> list[AudioChunk]:
     ffmpeg = ffmpeg_command(status)
     if not ffmpeg:
         fail("文件较大时需要 ffmpeg 来压缩或切分音频。")
 
-    pattern = workdir / "chunk_%03d.mp3"
+    pattern = workdir / "chunk_%03d.wav"
+    manifest = workdir / "chunks.csv"
     run_command(
         [
             ffmpeg,
             "-y",
+            "-nostdin",
             "-i",
             str(video),
+            "-map",
+            "0:a:0",
             "-vn",
             "-ac",
             "1",
             "-ar",
             "16000",
-            "-b:a",
-            "48k",
+            "-c:a",
+            "pcm_s16le",
             "-f",
             "segment",
             "-segment_time",
             str(chunk_seconds),
             "-reset_timestamps",
             "1",
+            "-segment_list",
+            str(manifest),
+            "-segment_list_type",
+            "csv",
             str(pattern),
         ]
     )
-    chunks = sorted(workdir.glob("chunk_*.mp3"))
+    chunks = []
+    with manifest.open(encoding="utf-8", newline="") as stream:
+        for row in csv.reader(stream):
+            if len(row) != 3:
+                fail("ffmpeg 返回了无效的音频切片清单。")
+            path = workdir / Path(row[0]).name
+            start, end = float(row[1]), float(row[2])
+            if not path.is_file() or not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start:
+                fail("ffmpeg 返回了无效的音频切片或时间戳。")
+            if chunks and start < chunks[-1].start:
+                fail("ffmpeg 音频切片时间戳顺序错误。")
+            chunks.append(AudioChunk(path, start))
     if not chunks:
         fail("ffmpeg 没有生成音频切片，请确认视频包含音轨。")
     return chunks
@@ -700,12 +727,13 @@ def _parse_openai_verbose_transcript(raw: str) -> _ChunkTranscript:
 
 def _merge_chunks_into_segments(
     segments_per_chunk: list[list[_ChunkSegment]],
-    chunk_seconds: int,
+    chunk_starts: list[float],
 ) -> list[_ChunkSegment]:
     """Shift per-chunk segments to absolute times and flatten."""
     merged: list[_ChunkSegment] = []
-    for chunk_idx, segs in enumerate(segments_per_chunk):
-        offset = chunk_idx * chunk_seconds
+    if len(segments_per_chunk) != len(chunk_starts):
+        raise ValueError("Missing chunk start timestamps")
+    for offset, segs in zip(chunk_starts, segments_per_chunk):
         for seg in segs:
             merged.append(
                 _ChunkSegment(
@@ -747,13 +775,22 @@ def transcribe_audio(
     api_format = "verbose_json"
 
     with local_temp_dir(out.parent, "video_text_") as temp_dir:
-        chunks = split_audio_with_ffmpeg(video, temp_dir, status, chunk_seconds)
+        upload_limit = int(max_upload_mb * 1024 * 1024)
+        safe_chunk_seconds = chunk_seconds
+        if upload_limit > 0:
+            # 16 kHz mono PCM16: reserve room for the WAV header and packet rounding.
+            safe_chunk_seconds = min(chunk_seconds, (upload_limit - 65536) // 32000)
+            if safe_chunk_seconds < 1:
+                fail("上传大小上限过小，无法生成安全的音频切片；请将 --max-upload-mb 设为至少 0.1。")
+        chunks = split_audio_with_ffmpeg(video, temp_dir, status, safe_chunk_seconds)
+        if upload_limit > 0 and any(chunk.path.stat().st_size > upload_limit for chunk in chunks):
+            fail("音频切片仍超过上传大小上限，尚未上传；请减小 --chunk-seconds。")
         segments_per_chunk: list[list[_ChunkSegment]] = []
         chunk_texts: list[str] = []
         for index, chunk in enumerate(chunks, start=1):
-            print(f"转写切片 {index}/{len(chunks)}: {chunk.name}")
+            print(f"转写切片 {index}/{len(chunks)}: {chunk.path.name}")
             raw = transcribe_one_file(
-                chunk,
+                chunk.path,
                 model=model,
                 language=language,
                 prompt=prompt,
@@ -765,7 +802,7 @@ def transcribe_audio(
             segments_per_chunk.append(transcript.segments)
             chunk_texts.append(transcript.text or " ".join(s.text for s in transcript.segments))
 
-        merged = _merge_chunks_into_segments(segments_per_chunk, chunk_seconds)
+        merged = _merge_chunks_into_segments(segments_per_chunk, [chunk.start for chunk in chunks])
         if final_format == "json":
             payload = {
                 "text": "\n\n".join(chunk_texts) or " ".join(s.text for s in merged),
@@ -820,38 +857,56 @@ def transcribe_with_local_whisper(
         import whisper
     except ImportError:
         fail("未安装本地 Whisper。请运行: python -m pip install openai-whisper imageio-ffmpeg")
-    from transcription_support import decode_audio, save_review
+    from transcription_support import audio_duration, iter_audio_chunks, save_review
 
     status = detect_tools()
     ffmpeg = ffmpeg_command(status)
     if not ffmpeg:
         fail("需要 ffmpeg 来读取音频。请安装 imageio-ffmpeg 或完整 ffmpeg。")
+    duration = audio_duration(video, status.ffprobe)
     print("[stage:decode]", flush=True)
-    audio = decode_audio(video, ffmpeg, audio_channel, enhance_audio)
     print("[stage:model]", flush=True)
     print(f"加载 Whisper 模型: {model_name}；未缓存的模型首次使用需要下载。", flush=True)
     from model_storage import model_directory
     cache_dir = model_directory("whisper")
     model = whisper.load_model(model_name, download_root=str(cache_dir))
     print("[stage:transcribe]", flush=True)
-    result = model.transcribe(
-        audio,
-        language=language,
-        task=task,
-        fp16=status.cuda_gpu,
-        verbose=verbose,
-        initial_prompt=prompt or None,
-        condition_on_previous_text=False,
-        temperature=(0.0, 0.2, 0.4),
-        beam_size=5,
-        no_speech_threshold=0.6,
-        logprob_threshold=-1.0,
-        compression_ratio_threshold=2.4,
-    )
+    result = {"text": "", "language": language, "segments": []}
+    texts = []
+    with closing(iter_audio_chunks(video, ffmpeg, audio_channel, enhance_audio, chunk_seconds=600)) as chunks:
+        for offset, audio in chunks:
+            partial = model.transcribe(
+                audio,
+                language=result["language"],
+                task=task,
+                fp16=status.cuda_gpu,
+                verbose=verbose,
+                initial_prompt=prompt or None,
+                condition_on_previous_text=False,
+                temperature=(0.0, 0.2, 0.4),
+                beam_size=5,
+                no_speech_threshold=0.6,
+                logprob_threshold=-1.0,
+                compression_ratio_threshold=2.4,
+            )
+            result["language"] = result["language"] or partial.get("language")
+            texts.append(partial.get("text") or "")
+            for segment in partial.get("segments") or []:
+                shifted = dict(segment, start=segment["start"] + offset, end=segment["end"] + offset)
+                if segment.get("words"):
+                    shifted["words"] = [dict(word, start=word["start"] + offset, end=word["end"] + offset)
+                                        for word in segment["words"]]
+                result["segments"].append(shifted)
+            print(f"已处理音频至 {format_seconds(offset + len(audio) / 16000)}", flush=True)
+            if duration:
+                print(f"{min(99, round((offset + len(audio) / 16000) / duration * 100))}%| audio processed", flush=True)
+    if duration:
+        print("100%| recognition complete", flush=True)
+    result["text"] = " ".join(text.strip() for text in texts if text.strip())
     print("[stage:export]", flush=True)
     write_text(out, format_whisper_result(result, output_format))
     save_review(out, video, result, model=model_name, channel=audio_channel,
-                enhance=enhance_audio, prompt=prompt or "", task=task)
+                enhance=enhance_audio, prompt=prompt or "", task=task, chunk_seconds=600)
     return out
 
 
@@ -1037,8 +1092,13 @@ def run_auto(video: Path, out: Path, status: ToolStatus, args: argparse.Namespac
                 enhance_audio=args.enhance_audio,
             )
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as exc:
-            print(f"本地 Whisper 转写失败，改用 OpenAI API: {exc}")
+            print(f"本地 Whisper 转写失败: {exc}")
 
+    if not args.allow_cloud_fallback:
+        fail("本地识别不可用或失败，已停止，未上传音频。只有显式添加 --allow-cloud-fallback 才允许云端回退。")
+    if args.whisper_task == "translate":
+        fail("Auto 云端回退不支持翻译任务，已停止，未上传音频。请使用本地 Whisper。")
+    print("已授权云端回退，将使用 OpenAI API 上传并转写音频。", flush=True)
     return transcribe_audio(
         video,
         out,
@@ -1069,6 +1129,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenAI 转写输出格式。OCR 固定输出 txt。",
     )
     parser.add_argument("--model", default="whisper-1", help="OpenAI 音频转写模型名。")
+    parser.add_argument("--allow-cloud-fallback", action="store_true",
+                        help="仅用于 auto：允许本地识别不可用或失败后上传音频到 OpenAI API，默认禁止。")
     parser.add_argument(
         "--whisper-model",
         default="base",

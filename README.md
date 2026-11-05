@@ -69,11 +69,31 @@ python tools/setup_sensevoice.py --model-dir D:/VideoTextModels
 
 ![桌面转写工作台](assets/desktop-ui.png)
 
-左侧集中设置语言、模型、输出格式与声道；文件类型、输出目录、翻译任务、并行数和运行环境放在高级设置里。正文上方可播放原始音频、拖动定位和调速（0.5–2 倍），双击带时间戳的行可跳到对应位置。日志和历史默认收起，可由右下角按钮展开。
+左侧集中设置语言、模型、输出格式与声道；人声增强、术语提示、文件类型、输出目录、翻译任务、并行数和运行环境放在高级设置里。正文上方可播放原始音频、前后跳转 3 秒、拖动定位和调速（0.5–2 倍），单击时间戳可跳到对应位置。日志和历史默认收起，可由右下角按钮展开。
 
-支持直接添加 M4A、MP3、WAV、FLAC、AAC、OGG、OPUS、WMA 音频。切换文件会保留未保存的编辑草稿，点击保存才写入当前文件。草稿只在本次运行中保留。
+支持直接添加 M4A、MP3、WAV、FLAC、AAC、OGG、OPUS、WMA 音频。切换文件会保留未保存的编辑草稿，刷新队列不会重置当前选区和撤销记录。后台任务启动时不切走正在查看的文件。关闭时会询问保存、放弃或取消；保存失败时不会关闭窗口。
+
+未保存的校对稿约每 2 秒备份到本机 `.transcribe_drafts/`，不覆盖原文件、不上传。异常退出后，下次启动可选择恢复、删除备份或稍后处理，也可从“更多操作”恢复。若原文件已经改变或丢失，会另存恢复副本，避免覆盖新内容；突然断电或强制结束时，最近几秒的输入仍可能未备份。恢复备份同样包含转写内容，处理敏感录音时请妥善保管。
+
+“校对 / 阅读”切换保留同一份原稿：阅读视图隐藏时间标签、增加段落留白，不改写识别内容。复制按钮默认复制纯文本；右侧“更多操作”菜单提供查找替换、打开结果、无时间戳导出和复制原稿。替换只处理输入的普通文字，支持撤销；阅读视图不能修改内容。双击任务行也可打开已生成的结果文件。
+
+播放器可勾选“跟随文字”，按现有时间戳高亮并滚动到当前片段，不移动编辑光标，也不改动正文。编辑未保存、选择文字或打开查找栏时暂停跟随；保存后可继续。SenseVoice 跟随的是约 20 秒的识别区间，不是逐句或逐字对齐。JSON 结果仅在阅读视图提供跟随；缺少有效时间戳或校对数据过期时不启用。
+
+| 快捷键 | 操作 |
+| --- | --- |
+| `Ctrl+O` / `Ctrl+S` | 添加文件 / 保存当前校对稿 |
+| `Ctrl+Space` | 播放或暂停，不占用正常输入的空格 |
+| `Alt+Left` / `Alt+Right` | 后退 / 前进 3 秒 |
+| `Alt+Up` / `Alt+Down` | 上一个 / 下一个待核对片段 |
+| `Ctrl+F` / `Ctrl+H` | 查找 / 查找替换 |
+| `F3` / `Shift+F3` | 下一个 / 上一个匹配项 |
+| `Esc` | 焦点位于查找栏时收起查找 |
+
+输出目录、识别模式、语言、模型、声道和播放速度等常用选择会在正常关闭或开始转写时保存到本机 `.transcribe_settings.json`，不会提交到 Git。云端回退授权不会保存，并行数每次启动重置为 1。文件被其他程序修改或删除后，保存会停止，避免覆盖磁盘上的新内容。
 
 不同目录的同名文件会分配不同的输出文件名。重复转写时，如果输出已存在，会新增编号文件，保留上一版。字幕烧录在后台运行，可取消；输出已存在时也自动使用新文件名。
+
+Auto 默认只尝试内嵌字幕和本地 Whisper；即使已设置 API Key，本地识别失败后也不会自动上传音频。需要云端回退时，勾选“允许云端回退（上传音频）”，并在开始批次前确认授权。此授权不会写入历史记录。直接选择 OpenAI API 模式仍表示使用云端服务。
 
 ### 模糊录音与校对
 
@@ -84,6 +104,12 @@ python tools/setup_sensevoice.py --model-dir D:/VideoTextModels
 模型目录由本机 `.model_storage.json` 的 `directory` 统一指定，也可使用 `VIDEO_TEXT_MODEL_DIR` 环境变量覆盖。Whisper 放在其 `whisper/` 子目录，SenseVoice 放在 `sensevoice/`。未配置时使用项目 `.video_text_cache/`；配置文件不会提交到 Git。高级设置里可查看当前模型目录。使用 `--model-dir D:/VideoTextModels` 配置后，两个引擎的后续下载和加载都会使用 D 盘。
 
 本地转写优先使用确定性解码；遇到异常重复或低可信结果时使用有限的温度回退重试，保留正常静音阈值，并关闭跨片段文本续接。每份输出旁会生成 `.review.json`，记录模型提示需要回听的片段；点击“待核对”可定位播放。这些提示不是准确率评分，未标记内容仍可能识别有误。增强、术语提示可能改善或恶化结果，应与原音版本比较。
+
+保存校对正文时，会同步 `.review.json` 和待核对列表，并保留原有核对标记与时间精度。请保留 TXT 时间标签、SRT/VTT 时间行；JSON 的 `text` 与 `segments` 需一致。无效编辑会提示错误，不覆盖原文件。外部修改导致正文与校对数据不匹配时，界面会显示“校对数据已过期”，保存时也会停止，需恢复配套的正文或重新转写，避免继承过期标记。
+
+本地识别连续解码并按块读取：SenseVoice 保持原有 20 秒区间，Whisper 每次处理最多 10 分钟，并按实际样本位置还原时间轴。不再将整段录音的 PCM 一次性读入内存；模型、推理计算和结果文本仍需要内存，多个并行任务也会分别加载模型。长录音的 Whisper 分块边界可能影响相邻词句，应回听核对。
+
+云端大文件使用无损 WAV 分块，按上传上限限制块长，并根据 [FFmpeg 切片清单](https://ffmpeg.org/ffmpeg-formats.html#segment_002c-stream_005fsegment_002c-ssegment) 记录的实际起点合并字幕，不用固定时长推算偏移。
 
 导出无时间戳副本会另存为 `*_reading.txt`，保留原词句，不生成或补写答辩内容；原始转写不受影响。
 
@@ -111,7 +137,7 @@ python tools/setup_sensevoice.py
 
 ### 回归验证
 
-`python -m unittest discover -s tests -v` 验证音频支持、输出命名、预览草稿、跳过任务、真实并行子进程队列、字幕烧录及切片返回缺时间戳等边界情况。真实字幕烧录测试使用本地 ffmpeg，不调用转写 API，也不下载 Whisper 模型。
+`python -m unittest discover -s tests -v` 验证音频支持、输出命名、预览草稿、播放跟随、异常退出恢复、设置保存、跳过任务、真实并行子进程队列、字幕烧录、云端授权、校对文件同步、流式解码及切片实际起点等边界情况。真实音视频测试使用本地 ffmpeg，云端调用使用模拟，不上传录音，也不下载 Whisper 模型。
 
 ### 模式怎么选
 
@@ -122,7 +148,7 @@ python tools/setup_sensevoice.py
 | `OpenAI API` | 想用远程 API 转写 | `OPENAI_API_KEY` |
 | `Embedded subtitles` | 视频文件本身带字幕轨 | `ffmpeg` 和 `ffprobe` |
 | `Visual OCR` | 字幕或文字是画面的一部分，可在界面里指定 OCR 语言 | `tesseract` 和对应语言包 |
-| `Auto (best)` | 先试字幕轨，再回退到语音转写 | 取决于命中的模式 |
+| `Auto (best)` | 先试字幕轨，再试本地 Whisper；云端回退需额外授权 | 取决于命中的模式 |
 
 ## Command Line
 
@@ -192,7 +218,8 @@ python video_text_extractor.py video.mp4 --dry-run
 
 | 参数 | 说明 |
 | --- | --- |
-| `--mode` | `whisper`、`audio`、`subtitle`、`ocr`、`auto` |
+| `--mode` | `sensevoice`（默认）、`whisper`、`audio`、`subtitle`、`ocr`、`auto` |
+| `--allow-cloud-fallback` | 仅用于 `auto`，显式允许本地失败或不可用后上传音频到 OpenAI API；默认关闭，翻译任务不回退 |
 | `--language` | 语言代码，例如 `en`、`zh`、`ja`、`ko`；语音模式也接受 `en-US` 这类地区码，会取主语言；不传则自动识别 |
 | `--whisper-model` | `tiny`、`base`、`small`、`medium`、`large-v3`、`turbo` |
 | `--whisper-task` | `transcribe` 原语言转写，`translate` 翻译成英文 |
@@ -287,7 +314,19 @@ python video_text_extractor.py video.mp4 --mode audio --language en -o transcrip
 ## Project Structure
 
 ```text
-video_text_gui.py          Desktop GUI
+video_text_gui.py          Desktop entry point and window coordination
+desktop_layout.py         Widget construction and signal wiring
+desktop_workspace.py      Transcript editing, reading, search and export
+desktop_queue.py          Subprocess queue and progress
+desktop_follow.py         Timestamp-based playback following
+desktop_recovery.py       Desktop draft recovery workflow
+draft_recovery.py         Atomic local snapshots and session locks
+desktop_preferences.py    Local settings persistence
+desktop_strings.py        Chinese and English interface text
+desktop_options.py        Mode, language and format choices
+desktop_types.py          Job state and status constants
+desktop_runtime.py        Local runtime helpers
+review_player.py          Native audio player and transcript widgets
 video_text_extractor.py    Core CLI engine
 local_video_ocr.js         Node.js visual OCR helper
 start_video_text_gui.bat   Windows launcher

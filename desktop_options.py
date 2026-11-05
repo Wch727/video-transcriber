@@ -1,0 +1,103 @@
+"""Supported desktop modes, languages and output choices."""
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent
+
+VIDEO_EXTS = {
+    ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".wmv", ".flv",
+    ".mpg", ".mpeg", ".3gp", ".ts", ".mts", ".m2ts", ".ogv",
+    ".m4a", ".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".wma",
+}
+
+VIDEO_FILTERS = {
+    "All supported": "*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.wmv *.flv *.mpg *.mpeg *.3gp *.ts *.mts *.m2ts *.ogv *.m4a *.mp3 *.wav *.flac *.aac *.ogg *.opus *.wma",
+    "Audio": "*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.opus *.wma",
+    "MP4": "*.mp4",
+    "MOV": "*.mov",
+    "MKV": "*.mkv",
+    "WEBM": "*.webm",
+    "M4V": "*.m4v",
+    "AVI": "*.avi",
+    "WMV": "*.wmv",
+    "FLV": "*.flv",
+    "MPEG/MPG": "*.mpeg *.mpg",
+    "Transport Stream": "*.ts *.mts *.m2ts",
+    "OGV": "*.ogv",
+}
+
+MODES = [
+    ("sensevoice", "Chinese cross-check"),
+    ("whisper", "Local Whisper"),
+    ("audio", "OpenAI API"),
+    ("subtitle", "Embedded subtitles"),
+    ("ocr", "Visual OCR"),
+    ("auto", "Auto (best)"),
+]
+
+LANGUAGES = [
+    ("Auto detect", ""),
+    ("English", "en"),
+    ("Chinese", "zh"),
+    ("Japanese", "ja"),
+    ("Korean", "ko"),
+    ("Spanish", "es"),
+    ("French", "fr"),
+    ("German", "de"),
+    ("Italian", "it"),
+    ("Portuguese", "pt"),
+    ("Russian", "ru"),
+    ("Arabic", "ar"),
+    ("Hindi", "hi"),
+    ("Vietnamese", "vi"),
+    ("Thai", "th"),
+    ("Turkish", "tr"),
+    ("Dutch", "nl"),
+    ("Swedish", "sv"),
+    ("Polish", "pl"),
+    ("Ukrainian", "uk"),
+    ("Indonesian", "id"),
+    ("Malay", "ms"),
+    ("Bengali", "bn"),
+    ("Urdu", "ur"),
+    ("Persian", "fa"),
+    ("Hebrew", "he"),
+    ("Greek", "el"),
+    ("Czech", "cs"),
+    ("Danish", "da"),
+    ("Finnish", "fi"),
+    ("Hungarian", "hu"),
+    ("Romanian", "ro"),
+    ("Norwegian", "no"),
+    ("Catalan", "ca"),
+    ("Latin", "la"),
+    ("Slovak", "sk"),
+    ("Slovenian", "sl"),
+    ("Croatian", "hr"),
+    ("Serbian", "sr"),
+    ("Bulgarian", "bg"),
+    ("Lithuanian", "lt"),
+    ("Latvian", "lv"),
+    ("Estonian", "et"),
+    ("Swahili", "sw"),
+    ("Malayalam", "ml"),
+    ("Tamil", "ta"),
+    ("Telugu", "te"),
+    ("Georgian", "ka"),
+    ("Kazakh", "kk"),
+    ("Nepali", "ne"),
+    ("Amharic", "am"),
+    ("Burmese", "my"),
+    ("Khmer", "km"),
+    ("Lao", "lo"),
+    ("Mongolian", "mn"),
+    ("Azerbaijani", "az"),
+    ("Uzbek", "uz"),
+    ("Custom code", "custom"),
+]
+
+OUTPUT_FORMATS = {
+    "TXT": ("text", ".txt"),
+    "SRT": ("srt", ".srt"),
+    "VTT": ("vtt", ".vtt"),
+    "JSON": ("json", ".json"),
+}

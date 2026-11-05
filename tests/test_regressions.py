@@ -12,7 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import video_text_extractor as core
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from video_text_gui import VideoTextWindow, Job, VIDEO_EXTS
 
 
@@ -27,7 +27,7 @@ class ChunkTests(unittest.TestCase):
             root = Path(directory)
             source = root / "input.wav"
             source.write_bytes(b"audio")
-            with patch.object(core, "split_audio_with_ffmpeg", return_value=[source]), patch.object(core, "transcribe_one_file", return_value='{"text":"","segments":[]}'):
+            with patch.object(core, "split_audio_with_ffmpeg", return_value=[core.AudioChunk(source, 0)]), patch.object(core, "transcribe_one_file", return_value='{"text":"","segments":[]}'):
                 core.transcribe_audio(source, root / "out.vtt", None, model="whisper-1", language=None,
                                       prompt=None, response_format="vtt", max_upload_mb=0, chunk_seconds=10)
             self.assertEqual((root / "out.vtt").read_text(), "WEBVTT\n")
@@ -44,7 +44,7 @@ class ChunkTests(unittest.TestCase):
             source.write_bytes(b"audio")
             responses = [json.dumps({"text": "first", "segments": [{"start": 0, "end": 1, "text": "first"}]}),
                          json.dumps({"text": "second", "segments": []})]
-            with patch.object(core, "split_audio_with_ffmpeg", return_value=[source, source]), patch.object(core, "transcribe_one_file", side_effect=responses):
+            with patch.object(core, "split_audio_with_ffmpeg", return_value=[core.AudioChunk(source, 0), core.AudioChunk(source, 10)]), patch.object(core, "transcribe_one_file", side_effect=responses):
                 with self.assertRaises(SystemExit):
                     core.transcribe_audio(source, root / "out.srt", None, model="whisper-1", language=None,
                                           prompt=None, response_format="srt", max_upload_mb=0, chunk_seconds=10)
@@ -58,17 +58,53 @@ class GuiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        self.preferences_patch = patch("video_text_gui.SETTINGS_FILE", self.root / "settings.json")
+        self.preferences_patch.start()
         with patch.object(VideoTextWindow, "_refresh_runtime"):
             self.window = VideoTextWindow()
         self.window.output_dir.setText(str(self.root))
 
     def tearDown(self):
-        self.window.close()
+        with patch("video_text_gui.QMessageBox.question", return_value=QMessageBox.Discard):
+            self.window.close()
         self.app.processEvents()
+        self.preferences_patch.stop()
         self.temp.cleanup()
 
     def test_audio_supported(self):
         self.assertIn(".m4a", VIDEO_EXTS)
+
+    def test_cloud_fallback_requires_opt_in_and_batch_confirmation(self):
+        from PySide6.QtWidgets import QMessageBox
+        self.window._set_combo_data(self.window.mode_combo, "auto")
+        job = Job(self.root / "input.wav", self.root / "out.txt", mode="auto")
+        self.window.jobs = [job]
+        self.assertFalse(self.window.allow_cloud_check.isChecked())
+        self.assertNotIn("--allow-cloud-fallback", self.window.command_for(job))
+        self.window.allow_cloud_check.setChecked(True)
+        self.assertIn("--allow-cloud-fallback", self.window.command_for(job))
+        with patch("video_text_gui.QMessageBox.question", return_value=QMessageBox.No) as question, patch.object(self.window, "_fill_parallel_slots") as start:
+            self.window.start_jobs()
+            question.assert_called_once()
+            start.assert_not_called()
+        self.window._set_combo_data(self.window.mode_combo, "whisper")
+        self.window._set_combo_data(self.window.mode_combo, "auto")
+        self.assertFalse(self.window.allow_cloud_check.isChecked())
+
+    def test_saved_preview_refreshes_review_and_rejects_stale_sidecar(self):
+        from transcription_support import save_review
+        source, output = self.root / "input.wav", self.root / "out.txt"
+        output.write_text("[00:00:02 - 00:00:04] wrong", encoding="utf-8")
+        save_review(output, source, {"segments": [{"start": 2, "end": 4, "text": "wrong", "review_reasons": ["manual_review"]}]})
+        self.window.jobs = [Job(source, output)]
+        self.window.refresh_table()
+        self.window.table.selectRow(0)
+        self.window.preview.setPlainText("[00:00:02 - 00:00:04] corrected")
+        self.window._save_preview()
+        self.assertIn("corrected", self.window.review_list.item(0).text())
+        output.write_text("externally modified", encoding="utf-8")
+        self.window._load_review(output, source)
+        self.assertEqual(self.window.review_list.count(), 0)
 
     def test_sensevoice_is_default_and_output_is_txt(self):
         self.assertEqual(self.window.mode_combo.currentData(), "sensevoice")

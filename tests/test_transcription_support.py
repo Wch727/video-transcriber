@@ -72,11 +72,11 @@ class SupportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "transcript.txt"
-            with patch.dict(sys.modules, {"whisper": whisper}), patch.object(core, "detect_tools", return_value=status), patch("transcription_support.decode_audio", return_value=np.zeros(16000)) as decoder:
+            with patch.dict(sys.modules, {"whisper": whisper}), patch.object(core, "detect_tools", return_value=status), patch("transcription_support.iter_audio_chunks", return_value=((offset, audio) for offset, audio in [(0, np.zeros(16000))])) as decoder:
                 core.transcribe_with_local_whisper(root / "source.wav", output, model_name="small",
                     language="en", task="transcribe", verbose=False, prompt="technical term",
                     audio_channel="right", enhance_audio=True)
-                decoder.assert_called_once_with(root / "source.wav", "ffmpeg", "right", True)
+                decoder.assert_called_once_with(root / "source.wav", "ffmpeg", "right", True, chunk_seconds=600)
             options = model.transcribe.call_args.kwargs
             self.assertEqual(options["initial_prompt"], "technical term")
             self.assertFalse(options["condition_on_previous_text"])
